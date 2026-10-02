@@ -145,11 +145,7 @@ EOF
 	fi
 
 	say "checking the config with the new binary"
-	set -a
-	# shellcheck disable=SC1091
-	. "$ETC/secrets.env"
-	set +a
-	"$src/loglantern" -config "$ETC/config.yaml" check-config >/dev/null ||
+	"$src/loglantern" -config "$ETC/config.yaml" -env-file "$ETC/secrets.env" check-config >/dev/null ||
 		die "config check failed; nothing was changed (run: loglantern -config $ETC/config.yaml check-config)"
 
 	old=""

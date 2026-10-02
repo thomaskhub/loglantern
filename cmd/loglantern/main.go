@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -26,11 +27,15 @@ var version = "dev"
 func main() {
 	cfgPath := flag.String("config", "/etc/loglantern/config.yaml", "config file")
 	level := flag.String("log-level", "info", "debug, info, warn or error")
+	envFile := flag.String("env-file", "auto", `KEY=value file with secrets; "auto" = secrets.env next to the config if present, "" = none`)
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "usage: loglantern [flags] [run|check-config|version]\n\nSIGHUP reloads the config (listen addresses and storage.path need a restart).\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+	if err := loadEnvFile(*envFile, *cfgPath); err != nil {
+		fatal(err)
+	}
 	cmd := "run"
 	if flag.NArg() > 0 {
 		cmd = flag.Arg(0)
@@ -168,4 +173,41 @@ func summary(c *config.Config) {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "loglantern:", err)
 	os.Exit(1)
+}
+
+// loadEnvFile sets variables from a systemd-style environment file; variables already set win.
+func loadEnvFile(path, cfgPath string) error {
+	auto := path == "auto"
+	if auto {
+		path = filepath.Join(filepath.Dir(cfgPath), "secrets.env")
+	}
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if auto {
+			return nil // absent, or not readable by the service user (systemd passes the variables itself)
+		}
+		return fmt.Errorf("env file: %w", err)
+	}
+	for i, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		k = strings.TrimSpace(strings.TrimPrefix(k, "export "))
+		if !ok || k == "" {
+			return fmt.Errorf("env file %s:%d: want KEY=value", path, i+1)
+		}
+		v = strings.TrimSpace(v)
+		if len(v) >= 2 && (v[0] == '"' && v[len(v)-1] == '"' || v[0] == '\'' && v[len(v)-1] == '\'') {
+			v = v[1 : len(v)-1]
+		}
+		if _, set := os.LookupEnv(k); !set {
+			_ = os.Setenv(k, v)
+		}
+	}
+	return nil
 }

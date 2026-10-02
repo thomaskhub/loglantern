@@ -3,6 +3,12 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `check-config` run by hand reads `secrets.env` next to the config (new flag `-env-file`), like the service does.
+
 ## [0.1.0] - 2026-10-02
 
 ### Added

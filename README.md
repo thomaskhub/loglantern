@@ -65,7 +65,9 @@ Other ways:
   Docker adds a daemon, so on small VMs the binary is lighter.
 - **From source:** `go install github.com/thomaskhub/loglantern/cmd/loglantern@latest` (Go 1.26+), or `docker build .`.
 
-Commands: `loglantern [-config file] [-log-level info] run | check-config | version`.
+Commands: `loglantern [-config file] [-env-file file] [-log-level info] run | check-config | version`.
+Secrets are read from `secrets.env` next to the config when it is readable, so `sudo loglantern check-config`
+sees the same variables as the service.
 `systemctl reload loglantern` (SIGHUP) applies a changed config without dropping data; a broken config
 is rejected and the running one stays. Changing `listen` or `storage.path` needs a restart.
 
