@@ -37,8 +37,8 @@ rules:
   - {name: rps, type: anomaly, series: app.rps}
   - {name: errors, type: lograte, level: err, count: 50, per: 5m}
   - {name: oom, type: lograte, pattern: "out of memory", count: 1, per: 5m}
-routes: [{name: all, notifier: webhook}]
-notifiers: {webhook: {url_env: LL_HOOK}}
+routes: [{name: all, send: [hook]}]
+notifiers: {hook: {webhook: {url_env: LL_HOOK}}}
 auth: {api_keys: [{name: dash, key_env: LL_KEY, role: logs}]}
 `, ip, ap, filepath.Join(dir, "ll.db"))
 	_ = os.WriteFile(filepath.Join(dir, "c.yaml"), []byte(cfg), 0o644)

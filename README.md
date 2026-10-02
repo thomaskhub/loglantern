@@ -68,13 +68,26 @@ A series without new data for 10 minutes resolves its incidents; a host without 
 opens a `host-missing` incident. Each incident is announced once when it opens and once when it resolves. After a restart, the window is
 rebuilt from the database and open incidents are not sent again.
 
-## Routing and notifiers
+## Notifiers and routes
 
-Every route whose `match` fits (`env`, `host`, `role`, `service`, `severity` list) gets the message.
-`telegram` sends to a chat; `target` picks a forum topic from `notifiers.telegram.topics`
-(a Telegram group with topics enabled; the topic id is the `message_thread_id`). `webhook` posts
-`{"text": "...", "target": "..."}`. Failed sends are retried with backoff (30 s up to 30 min), and Telegram's
-`retry_after` is honoured. Messages stay in the outbox table until they are delivered.
+`notifiers` are named outputs; each has exactly one type section:
+
+| type | sends with | targets |
+|---|---|---|
+| `telegram` | Bot API, plain text | `topics`: name → forum topic id (`message_thread_id`) |
+| `slack` | bot token (`chat.postMessage`) or incoming webhook | `channels`: name → channel id (bot only) |
+| `email` | SMTP: STARTTLS (587, default), implicit TLS (465) or `none` for a local relay | `targets`: name → recipients; `to` is the default |
+| `webhook` | POST `{"text", "target"}` | any string, passed on |
+
+`routes` decide where messages go: every route whose `match` fits (`env`, `host`, `role`, `service`,
+`severity` list) sends to each entry of `send` (`notifier` or `notifier/target`). Options per route are
+`digest: 1h`, which bundles messages into at most one delivery per period (good for e-mail), and
+`send_resolved: false`. AI agents and the daily report name a route too.
+
+Each destination has its own outbox row: a failing destination is retried with backoff (30 s up to 30 min)
+without blocking the others. `retry_after`/`Retry-After` is honoured, and order is kept per destination.
+A new output type is a new section in `config.Notifier` plus a `Send(ctx, target, text)` implementation
+in `internal/notify`.
 
 ## API
 

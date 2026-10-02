@@ -136,11 +136,11 @@ func TestIncidentsAndOutbox(t *testing.T) {
 		t.Errorf("I6: %d incidents", len(list))
 	}
 
-	if err := s.Enqueue(ctx, "alarms", "hi", id, t0); err != nil {
+	if err := s.Enqueue(ctx, "alarms", "tg/ops", "hi", id, t0, t0); err != nil {
 		t.Fatal(err)
 	}
 	due, _ := s.Due(ctx, t0, 10)
-	if len(due) != 1 || due[0].Incident != id {
+	if len(due) != 1 || due[0].Incident != id || due[0].Dest != "tg/ops" || due[0].Route != "alarms" {
 		t.Fatalf("O1 due: %+v", due)
 	}
 	_ = s.MarkFailed(ctx, due[0].ID, t0.Add(time.Minute), "down")
@@ -155,6 +155,39 @@ func TestIncidentsAndOutbox(t *testing.T) {
 	if n, _ := s.PendingCount(ctx); n != 0 {
 		t.Errorf("O4 pending %d", n)
 	}
+	// O5 digest: held until notBefore, Pending returns the whole group
+	_ = s.Enqueue(ctx, "daily", "mail", "a", 0, t0, t0.Add(time.Hour))
+	_ = s.Enqueue(ctx, "daily", "mail", "b", 0, t0.Add(time.Minute), t0.Add(time.Hour+time.Minute))
+	_ = s.Enqueue(ctx, "daily", "tg", "c", 0, t0, t0.Add(time.Hour))
+	if due, _ := s.Due(ctx, t0.Add(59*time.Minute), 10); len(due) != 0 {
+		t.Error("O5 digest due early")
+	}
+	if p, _ := s.Pending(ctx, "daily", "mail"); len(p) != 2 || p[0].Text != "a" || p[1].Text != "b" {
+		t.Errorf("O5 pending group: %+v", p)
+	}
+}
+
+func TestOutboxMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	s := open1(t, path)
+	_, _ = s.w.Exec(`DROP TABLE outbox`)
+	_, _ = s.w.Exec(`CREATE TABLE outbox (id INTEGER PRIMARY KEY, created INTEGER NOT NULL, route TEXT NOT NULL, text TEXT NOT NULL,
+		incident INTEGER, attempts INTEGER NOT NULL DEFAULT 0, next_try INTEGER NOT NULL, sent INTEGER, error TEXT NOT NULL DEFAULT '')`)
+	_ = s.Close()
+	s = open1(t, path)
+	defer s.Close()
+	if err := s.Enqueue(context.Background(), "r", "d", "x", 0, t0, t0); err != nil {
+		t.Fatalf("O6 old database not migrated: %v", err)
+	}
+}
+
+func open1(t *testing.T, path string) *Store {
+	t.Helper()
+	s, err := Open(path, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 func TestHostsAndRetention(t *testing.T) {

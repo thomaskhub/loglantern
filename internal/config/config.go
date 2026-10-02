@@ -76,24 +76,24 @@ func (d Duration) D() time.Duration { return time.Duration(d) }
 
 // Config is the whole configuration.
 type Config struct {
-	Listen       Listen            `yaml:"listen"`
-	Ingest       Ingest            `yaml:"ingest"`
-	Storage      Storage           `yaml:"storage"`
-	Envs         map[string]Env    `yaml:"envs"`
-	Hosts        []Host            `yaml:"hosts"`
-	MissingAfter Duration          `yaml:"missing_after"`
-	Tick         Duration          `yaml:"tick"`
-	Window       Duration          `yaml:"window"`
-	Rules        []Rule            `yaml:"rules"`
-	Routes       []Route           `yaml:"routes"`
-	Notifiers    Notifiers         `yaml:"notifiers"`
-	AI           *AI               `yaml:"ai"`
-	Probes       []Probe           `yaml:"probes"`
-	Lightsail    *Lightsail        `yaml:"lightsail"`
-	Report       *Report           `yaml:"report"`
-	Auth         Auth              `yaml:"auth"`
-	CORS         []string          `yaml:"cors"`
-	Secrets      map[string]string `yaml:"-"` // resolved from the environment
+	Listen       Listen              `yaml:"listen"`
+	Ingest       Ingest              `yaml:"ingest"`
+	Storage      Storage             `yaml:"storage"`
+	Envs         map[string]Env      `yaml:"envs"`
+	Hosts        []Host              `yaml:"hosts"`
+	MissingAfter Duration            `yaml:"missing_after"`
+	Tick         Duration            `yaml:"tick"`
+	Window       Duration            `yaml:"window"`
+	Rules        []Rule              `yaml:"rules"`
+	Routes       []Route             `yaml:"routes"`
+	Notifiers    map[string]Notifier `yaml:"notifiers"`
+	AI           *AI                 `yaml:"ai"`
+	Probes       []Probe             `yaml:"probes"`
+	Lightsail    *Lightsail          `yaml:"lightsail"`
+	Report       *Report             `yaml:"report"`
+	Auth         Auth                `yaml:"auth"`
+	CORS         []string            `yaml:"cors"`
+	Secrets      map[string]string   `yaml:"-"` // resolved from the environment
 }
 
 // Listen addresses.
@@ -183,21 +183,74 @@ type Rule struct {
 	MinDelta   float64 `yaml:"min_delta"`
 }
 
-// Route sends matching incidents (and reports) to a notifier target.
+// Route sends matching incidents (and reports, AI answers) to one or more destinations.
 type Route struct {
-	Name     string `yaml:"name"`
-	Match    Match  `yaml:"match"`
-	Notifier string `yaml:"notifier"` // telegram | webhook
-	Target   string `yaml:"target"`   // telegram topic name
+	Name         string   `yaml:"name"`
+	Match        Match    `yaml:"match"`
+	Send         []string `yaml:"send"`          // "notifier" or "notifier/target"
+	Digest       Duration `yaml:"digest"`        // > 0: bundle messages, at most one delivery per period
+	SendResolved *bool    `yaml:"send_resolved"` // default true
 }
 
-// Notifiers configuration.
-type Notifiers struct {
+// Resolved reports whether resolved messages go to this route.
+func (r Route) Resolved() bool { return r.SendResolved == nil || *r.SendResolved }
+
+// SplitDest splits "notifier/target".
+func SplitDest(d string) (notifier, target string) {
+	notifier, target, _ = strings.Cut(d, "/")
+	return notifier, target
+}
+
+// Notifier is one named output; exactly one type section is set.
+// A new output type is a new section here plus its sender in package notify.
+type Notifier struct {
 	Telegram *Telegram `yaml:"telegram"`
+	Slack    *Slack    `yaml:"slack"`
+	Email    *Email    `yaml:"email"`
 	Webhook  *Webhook  `yaml:"webhook"`
 }
 
-// Telegram bot settings; topics map a target name to a forum topic (message_thread_id).
+// Type returns the configured type ("" if none or several).
+func (n Notifier) Type() string {
+	var types []string
+	if n.Telegram != nil {
+		types = append(types, "telegram")
+	}
+	if n.Slack != nil {
+		types = append(types, "slack")
+	}
+	if n.Email != nil {
+		types = append(types, "email")
+	}
+	if n.Webhook != nil {
+		types = append(types, "webhook")
+	}
+	if len(types) != 1 {
+		return ""
+	}
+	return types[0]
+}
+
+// validTarget reports whether target is allowed ("" = the notifier's default).
+func (n Notifier) validTarget(target string) bool {
+	if target == "" {
+		return true
+	}
+	switch {
+	case n.Telegram != nil:
+		_, ok := n.Telegram.Topics[target]
+		return ok
+	case n.Slack != nil:
+		_, ok := n.Slack.Channels[target]
+		return ok && n.Slack.TokenEnv != ""
+	case n.Email != nil:
+		_, ok := n.Email.Targets[target]
+		return ok
+	}
+	return true // webhook: the target is passed on as a field
+}
+
+// Telegram bot; topics map a target name to a forum topic (message_thread_id).
 type Telegram struct {
 	TokenEnv string         `yaml:"token_env"`
 	ChatID   string         `yaml:"chat_id"`
@@ -205,7 +258,29 @@ type Telegram struct {
 	BaseURL  string         `yaml:"base_url"`
 }
 
-// Webhook posts {"text": …} to a URL held in an environment variable.
+// Slack: a bot token (chat.postMessage; channels map a target to a channel id) or an incoming webhook (one channel).
+type Slack struct {
+	TokenEnv      string            `yaml:"token_env"`
+	Channel       string            `yaml:"channel"`  // default channel id (bot token)
+	Channels      map[string]string `yaml:"channels"` // target → channel id
+	WebhookURLEnv string            `yaml:"webhook_url_env"`
+	BaseURL       string            `yaml:"base_url"`
+}
+
+// Email over SMTP (works with most providers' SMTP relays).
+type Email struct {
+	Host          string              `yaml:"host"`
+	Port          int                 `yaml:"port"` // default 587
+	TLS           string              `yaml:"tls"`  // starttls (default), tls (implicit, port 465) or none
+	UserEnv       string              `yaml:"user_env"`
+	PasswordEnv   string              `yaml:"password_env"`
+	From          string              `yaml:"from"`
+	To            []string            `yaml:"to"`      // default recipients
+	Targets       map[string][]string `yaml:"targets"` // target → recipients
+	SubjectPrefix string              `yaml:"subject_prefix"`
+}
+
+// Webhook posts {"text", "target"} to a URL held in an environment variable.
 type Webhook struct {
 	URLEnv string `yaml:"url_env"`
 }
@@ -364,6 +439,25 @@ func (c *Config) defaults() {
 			*d = Duration(v)
 		}
 	}
+	for _, n := range c.Notifiers {
+		if e := n.Email; e != nil {
+			if e.Port == 0 {
+				e.Port = 587
+				if e.TLS == "tls" {
+					e.Port = 465
+				}
+			}
+			if e.TLS == "" {
+				e.TLS = "starttls"
+				if e.Port == 465 {
+					e.TLS = "tls"
+				}
+			}
+			if e.SubjectPrefix == "" {
+				e.SubjectPrefix = "[loglantern]"
+			}
+		}
+	}
 	if c.Ingest.MaxBodyMB == 0 {
 		c.Ingest.MaxBodyMB = 16
 	}
@@ -463,11 +557,19 @@ func (c *Config) resolveSecrets() {
 	for _, e := range c.Envs {
 		add(e.IngestTokenEnv)
 	}
-	if t := c.Notifiers.Telegram; t != nil {
-		add(t.TokenEnv)
-	}
-	if w := c.Notifiers.Webhook; w != nil {
-		add(w.URLEnv)
+	for _, n := range c.Notifiers {
+		switch {
+		case n.Telegram != nil:
+			add(n.Telegram.TokenEnv)
+		case n.Slack != nil:
+			add(n.Slack.TokenEnv)
+			add(n.Slack.WebhookURLEnv)
+		case n.Email != nil:
+			add(n.Email.UserEnv)
+			add(n.Email.PasswordEnv)
+		case n.Webhook != nil:
+			add(n.Webhook.URLEnv)
+		}
 	}
 	if c.AI != nil {
 		add(c.AI.KeyEnv)
@@ -519,19 +621,60 @@ func (c *Config) validate() error {
 			bad("routes[%d]: name missing or duplicate", i)
 		}
 		routes[r.Name] = true
-		switch r.Notifier {
+		if len(r.Send) == 0 {
+			bad("routes.%s: send needs at least one notifier", r.Name)
+		}
+		for _, d := range r.Send {
+			name, target := SplitDest(d)
+			n, ok := c.Notifiers[name]
+			switch {
+			case !ok:
+				bad("routes.%s: notifier %q is not configured", r.Name, name)
+			case !n.validTarget(target):
+				bad("routes.%s: %s has no target %q", r.Name, name, target)
+			}
+		}
+		if r.Digest < 0 {
+			bad("routes.%s: digest must not be negative", r.Name)
+		}
+	}
+	for name, n := range c.Notifiers {
+		if !nameRe.MatchString(name) {
+			bad("notifiers.%s: invalid name", name)
+		}
+		switch n.Type() {
 		case "telegram":
-			if c.Notifiers.Telegram == nil {
-				bad("routes.%s: notifier telegram is not configured", r.Name)
-			} else if _, ok := c.Notifiers.Telegram.Topics[r.Target]; r.Target != "" && !ok {
-				bad("routes.%s: telegram topic %q is not configured", r.Name, r.Target)
+			if n.Telegram.TokenEnv == "" || n.Telegram.ChatID == "" {
+				bad("notifiers.%s: telegram needs token_env and chat_id", name)
+			}
+		case "slack":
+			sl := n.Slack
+			if (sl.TokenEnv == "") == (sl.WebhookURLEnv == "") {
+				bad("notifiers.%s: slack needs token_env or webhook_url_env (one of them)", name)
+			}
+			if sl.TokenEnv != "" && sl.Channel == "" && len(sl.Channels) == 0 {
+				bad("notifiers.%s: slack with token_env needs channel or channels", name)
+			}
+			if sl.WebhookURLEnv != "" && (sl.Channel != "" || len(sl.Channels) > 0) {
+				bad("notifiers.%s: a slack webhook posts to its own channel; remove channel(s)", name)
+			}
+		case "email":
+			e := n.Email
+			if e.Host == "" || e.From == "" || (len(e.To) == 0 && len(e.Targets) == 0) {
+				bad("notifiers.%s: email needs host, from and to (or targets)", name)
+			}
+			if !slices.Contains([]string{"starttls", "tls", "none"}, e.TLS) {
+				bad("notifiers.%s: email tls must be starttls, tls or none", name)
+			}
+			if (e.UserEnv == "") != (e.PasswordEnv == "") {
+				bad("notifiers.%s: email needs both user_env and password_env, or neither", name)
 			}
 		case "webhook":
-			if c.Notifiers.Webhook == nil {
-				bad("routes.%s: notifier webhook is not configured", r.Name)
+			if n.Webhook.URLEnv == "" {
+				bad("notifiers.%s: webhook needs url_env", name)
 			}
 		default:
-			bad("routes.%s: notifier must be telegram or webhook", r.Name)
+			bad("notifiers.%s: set exactly one of telegram, slack, email, webhook", name)
 		}
 	}
 	names := map[string]bool{}

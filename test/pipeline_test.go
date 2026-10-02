@@ -63,9 +63,9 @@ rules:
   - {name: cpu, type: threshold, series: cpu.cpu_p, op: ">", value: "90", severity: critical}
   - {name: errors, type: lograte, level: err, count: 2, per: 1m}
 routes:
-  - {name: all, notifier: telegram, target: alerts}
+  - {name: all, send: [tg/alerts]}
 notifiers:
-  telegram: {token_env: LL_TEST_TG, chat_id: "-1", topics: {alerts: 7}}
+  tg: {telegram: {token_env: LL_TEST_TG, chat_id: "-1", topics: {alerts: 7}}}
 auth:
   api_keys: [{name: dash, key_env: LL_TEST_KEY, role: logs}]
 `
@@ -90,7 +90,7 @@ func startOn(t *testing.T, dbPath, ingestAddr string) *running {
 		t.Fatal(err)
 	}
 	n := &fakeNotifier{}
-	a.Notifiers = map[string]notify.Notifier{"telegram": n}
+	a.Notifiers = map[string]notify.Notifier{"tg": n}
 	il, err := net.Listen("tcp", ingestAddr)
 	if err != nil {
 		t.Fatal(err)

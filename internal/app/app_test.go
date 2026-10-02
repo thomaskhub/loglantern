@@ -47,7 +47,7 @@ func TestReportReview(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("LL_T", "tok")
 	cfg, err := config.Parse([]byte("storage: {path: " + filepath.Join(t.TempDir(), "x.db") + "}\nenvs: {uat: {ingest_token_env: LL_T}}\n" +
-		"routes: [{name: daily, notifier: webhook}, {name: ops, notifier: webhook}]\nnotifiers: {webhook: {url_env: LL_T}}\n" +
+		"routes: [{name: daily, send: [hook]}, {name: ops, send: [hook/ops]}]\nnotifiers: {hook: {webhook: {url_env: LL_T}}}\n" +
 		"ai: {base_url: " + srv.URL + ", key_env: LL_T, model: m, agents: [{name: review, on: daily_report}, {name: ops, on: daily_report, route: ops}, {name: explain, on: incident_open}]}\n"))
 	if err != nil {
 		t.Fatal(err)

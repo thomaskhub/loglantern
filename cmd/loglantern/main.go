@@ -96,12 +96,10 @@ func summary(c *config.Config) {
 		return "off"
 	}
 	var notifiers []string
-	if c.Notifiers.Telegram != nil {
-		notifiers = append(notifiers, "telegram")
+	for name, n := range c.Notifiers {
+		notifiers = append(notifiers, name+" ("+n.Type()+")")
 	}
-	if c.Notifiers.Webhook != nil {
-		notifiers = append(notifiers, "webhook")
-	}
+	sort.Strings(notifiers)
 	ai := on(c.AIEnabled())
 	if c.AI != nil {
 		var names []string

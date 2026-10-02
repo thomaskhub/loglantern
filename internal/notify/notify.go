@@ -3,6 +3,7 @@ package notify
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -127,24 +128,63 @@ func post(ctx context.Context, c *http.Client, url string, body any) (*http.Resp
 	return c.Do(req)
 }
 
-// FromConfig builds the configured notifiers by name ("telegram", "webhook").
+// FromConfig builds one notifier per configured name.
 func FromConfig(cfg *config.Config) map[string]Notifier {
 	client := &http.Client{Timeout: 15 * time.Second}
 	out := map[string]Notifier{}
-	if t := cfg.Notifiers.Telegram; t != nil {
-		base := t.BaseURL
-		if base == "" {
-			base = "https://api.telegram.org"
+	for name, n := range cfg.Notifiers {
+		switch {
+		case n.Telegram != nil:
+			t := n.Telegram
+			out[name] = &Telegram{Base: cmp.Or(t.BaseURL, "https://api.telegram.org"), Token: cfg.Secret(t.TokenEnv), ChatID: t.ChatID, Topics: t.Topics, Client: client}
+		case n.Slack != nil:
+			sl := n.Slack
+			out[name] = &Slack{Base: cmp.Or(sl.BaseURL, "https://slack.com"), Token: cfg.Secret(sl.TokenEnv), WebhookURL: cfg.Secret(sl.WebhookURLEnv),
+				Channel: sl.Channel, Channels: sl.Channels, Client: client}
+		case n.Email != nil:
+			e := n.Email
+			out[name] = &Email{Host: e.Host, Port: e.Port, TLS: e.TLS, User: cfg.Secret(e.UserEnv), Password: cfg.Secret(e.PasswordEnv),
+				From: e.From, To: e.To, Targets: e.Targets, SubjectPrefix: e.SubjectPrefix}
+		case n.Webhook != nil:
+			out[name] = &Webhook{URL: cfg.Secret(n.Webhook.URLEnv), Client: client}
 		}
-		out["telegram"] = &Telegram{Base: base, Token: cfg.Secret(t.TokenEnv), ChatID: t.ChatID, Topics: t.Topics, Client: client}
-	}
-	if w := cfg.Notifiers.Webhook; w != nil {
-		out["webhook"] = &Webhook{URL: cfg.Secret(w.URLEnv), Client: client}
 	}
 	return out
 }
 
-// Sender delivers due outbox messages with exponential backoff.
+// Outbox queues messages for every destination of a route.
+type Outbox struct {
+	st     *store.Store
+	routes map[string]config.Route
+}
+
+// NewOutbox creates the queue for the configured routes.
+func NewOutbox(st *store.Store, cfg *config.Config) *Outbox {
+	o := &Outbox{st: st, routes: map[string]config.Route{}}
+	for _, r := range cfg.Routes {
+		o.routes[r.Name] = r
+	}
+	return o
+}
+
+// Put queues text on every destination of route; resolved messages are skipped where send_resolved is false.
+func (o *Outbox) Put(ctx context.Context, route, text string, incident int64, resolved bool, now time.Time) error {
+	r, ok := o.routes[route]
+	if !ok {
+		return fmt.Errorf("route %q not configured", route)
+	}
+	if resolved && !r.Resolved() {
+		return nil
+	}
+	for _, d := range r.Send {
+		if err := o.st.Enqueue(ctx, route, d, text, incident, now, now.Add(time.Duration(r.Digest))); err != nil {
+			return fmt.Errorf("enqueue %s → %s: %w", route, d, err)
+		}
+	}
+	return nil
+}
+
+// Sender delivers due outbox messages with exponential backoff; digest routes are sent as one bundle.
 type Sender struct {
 	Store     *store.Store
 	Routes    map[string]config.Route
@@ -191,7 +231,10 @@ func (s *Sender) Run(ctx context.Context, wake <-chan struct{}) {
 	}
 }
 
-// Once sends everything due now; returns the number delivered.
+// digestChunk is the size limit of one bundled message.
+const digestChunk = 3500
+
+// Once sends everything due now; returns the number of outbox messages delivered.
 func (s *Sender) Once(ctx context.Context) int {
 	now := s.now()
 	msgs, err := s.Store.Due(ctx, now, 50)
@@ -200,43 +243,99 @@ func (s *Sender) Once(ctx context.Context) int {
 		return 0
 	}
 	sent := 0
+	done := map[string]bool{}    // digest groups handled this round
+	blocked := map[string]bool{} // notifiers that asked to wait
 	for _, m := range msgs {
-		err := s.send(ctx, m)
-		if err == nil {
-			if err := s.Store.MarkSent(ctx, m.ID, s.now()); err != nil {
-				s.Log.Error("outbox mark sent", "id", m.ID, "err", err)
-			}
-			sent++
+		name, _ := config.SplitDest(m.Dest)
+		if blocked[name] {
 			continue
 		}
-		wait := Backoff(m.Attempts)
-		var ra *RetryAfter
-		if errors.As(err, &ra) {
-			wait = max(ra.Wait, time.Second)
+		batch := [][]store.Message{{m}}
+		if r, ok := s.Routes[m.Route]; ok && r.Digest > 0 {
+			key := m.Route + "\x00" + m.Dest
+			if done[key] {
+				continue
+			}
+			done[key] = true
+			group, err := s.Store.Pending(ctx, m.Route, m.Dest)
+			if err != nil {
+				s.Log.Error("outbox", "err", err)
+				continue
+			}
+			batch = chunks(group)
 		}
-		s.Log.Warn("send failed", "id", m.ID, "route", m.Route, "attempt", m.Attempts+1, "retry_in", wait, "err", err)
-		if err := s.Store.MarkFailed(ctx, m.ID, now.Add(wait), err.Error()); err != nil {
-			s.Log.Error("outbox mark failed", "id", m.ID, "err", err)
-		}
-		if ra != nil {
-			break // receiver throttles: stop this round
+		for _, b := range batch {
+			text := b[0].Text
+			if len(b) > 1 || s.Routes[m.Route].Digest > 0 {
+				text = digestText(b)
+			}
+			err := s.send(ctx, m.Dest, text)
+			if err == nil {
+				for _, x := range b {
+					if err := s.Store.MarkSent(ctx, x.ID, s.now()); err != nil {
+						s.Log.Error("outbox mark sent", "id", x.ID, "err", err)
+					}
+				}
+				sent += len(b)
+				continue
+			}
+			wait := Backoff(m.Attempts)
+			var ra *RetryAfter
+			if errors.As(err, &ra) {
+				wait = max(ra.Wait, time.Second)
+				blocked[name] = true
+			}
+			s.Log.Warn("send failed", "route", m.Route, "dest", m.Dest, "messages", len(b), "attempt", m.Attempts+1, "retry_in", wait, "err", err)
+			for _, x := range b {
+				if err := s.Store.MarkFailed(ctx, x.ID, now.Add(wait), err.Error()); err != nil {
+					s.Log.Error("outbox mark failed", "id", x.ID, "err", err)
+				}
+			}
+			break // keep the order: the rest of this group waits too
 		}
 	}
 	return sent
 }
 
-func (s *Sender) send(ctx context.Context, m store.Message) error {
-	r, ok := s.Routes[m.Route]
-	if !ok {
-		return fmt.Errorf("route %q no longer configured", m.Route)
+// chunks splits a digest group into bundles below the size limit.
+func chunks(group []store.Message) [][]store.Message {
+	var out [][]store.Message
+	var cur []store.Message
+	size := 0
+	for _, m := range group {
+		if len(cur) > 0 && size+len(m.Text)+2 > digestChunk {
+			out = append(out, cur)
+			cur, size = nil, 0
+		}
+		cur = append(cur, m)
+		size += len(m.Text) + 2
 	}
-	n, ok := s.Notifiers[r.Notifier]
-	if !ok {
-		return fmt.Errorf("notifier %q not configured", r.Notifier)
+	if len(cur) > 0 {
+		out = append(out, cur)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	return out
+}
+
+func digestText(b []store.Message) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Digest: %d message(s)\n", len(b))
+	for _, m := range b {
+		sb.WriteString("\n")
+		sb.WriteString(m.Text)
+		sb.WriteString("\n")
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func (s *Sender) send(ctx context.Context, dest, text string) error {
+	name, target := config.SplitDest(dest)
+	n, ok := s.Notifiers[name]
+	if !ok {
+		return fmt.Errorf("notifier %q not configured", name)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	return n.Send(ctx, r.Target, m.Text)
+	return n.Send(ctx, target, text)
 }
 
 func (s *Sender) now() time.Time {

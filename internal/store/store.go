@@ -49,7 +49,8 @@ var schema = []string{
 	`CREATE INDEX IF NOT EXISTS incidents_opened ON incidents (opened)`,
 	`CREATE TABLE IF NOT EXISTS outbox (
 		id INTEGER PRIMARY KEY, created INTEGER NOT NULL, route TEXT NOT NULL, text TEXT NOT NULL,
-		incident INTEGER, attempts INTEGER NOT NULL DEFAULT 0, next_try INTEGER NOT NULL, sent INTEGER, error TEXT NOT NULL DEFAULT '')`,
+		incident INTEGER, attempts INTEGER NOT NULL DEFAULT 0, next_try INTEGER NOT NULL, sent INTEGER, error TEXT NOT NULL DEFAULT '',
+		dest TEXT NOT NULL DEFAULT '')`,
 	`CREATE INDEX IF NOT EXISTS outbox_pending ON outbox (next_try) WHERE sent IS NULL`,
 }
 
@@ -101,6 +102,16 @@ func (s *Store) migrate() error {
 	}
 	for _, stmt := range schema {
 		if _, err := s.w.Exec(stmt); err != nil {
+			return fmt.Errorf("schema: %w", err)
+		}
+	}
+	// databases from before destinations: add the column
+	var n int
+	if err := s.w.QueryRow(`SELECT count(*) FROM pragma_table_info('outbox') WHERE name = 'dest'`).Scan(&n); err != nil {
+		return fmt.Errorf("schema: %w", err)
+	}
+	if n == 0 {
+		if _, err := s.w.Exec(`ALTER TABLE outbox ADD COLUMN dest TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("schema: %w", err)
 		}
 	}

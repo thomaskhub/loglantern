@@ -16,7 +16,10 @@ import (
 	"github.com/thomkin/loglantern/internal/store"
 )
 
-var t0 = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+var (
+	t0 = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	no = false
+)
 
 func setup(t *testing.T, enrich Enricher) (*Manager, *store.Store) {
 	t.Helper()
@@ -28,10 +31,10 @@ func setup(t *testing.T, enrich Enricher) (*Manager, *store.Store) {
 	cfg := &config.Config{
 		Rules: []config.Rule{{Name: "cpu", Severity: "warning"}, {Name: "errors", Severity: "critical", Match: config.Match{Service: "api"}}},
 		Routes: []config.Route{
-			{Name: "all", Notifier: "telegram", Target: "alerts"},
-			{Name: "prod-critical", Notifier: "webhook", Match: config.Match{Env: "prod", Severity: []string{"critical"}}},
-			{Name: "db", Notifier: "telegram", Target: "db", Match: config.Match{Role: "db"}},
-			{Name: "api-svc", Notifier: "telegram", Match: config.Match{Service: "api"}},
+			{Name: "all", Send: []string{"tg/alerts"}},
+			{Name: "prod-critical", Send: []string{"hook", "mail"}, SendResolved: &no, Match: config.Match{Env: "prod", Severity: []string{"critical"}}},
+			{Name: "db", Send: []string{"tg/db"}, Match: config.Match{Role: "db"}},
+			{Name: "api-svc", Send: []string{"tg"}, Match: config.Match{Service: "api"}},
 		},
 	}
 	role := func(env, host string) string {
@@ -52,6 +55,9 @@ func due(t *testing.T, st *store.Store) []string {
 	var out []string
 	for _, m := range ms {
 		out = append(out, m.Route+"|"+m.Text)
+		if m.Route == "prod-critical" {
+			out[len(out)-1] = m.Route + ">" + m.Dest + "|" + m.Text
+		}
 		_ = st.MarkSent(context.Background(), m.ID, t0)
 	}
 	return out
@@ -80,6 +86,23 @@ func TestOpenResolveOnce(t *testing.T) {
 	_ = m.Handle(ctx, []rules.Transition{open}, t0.Add(20*time.Minute))
 	if got = due(t, st); len(got) != 1 || !strings.Contains(got[0], "#2") {
 		t.Fatalf("I3 reopen: %q", got)
+	}
+}
+
+func TestFanOutAndSendResolved(t *testing.T) {
+	m, st := setup(t, nil)
+	ctx := context.Background()
+	open := rules.Transition{Key: "cpu/prod/h1", Rule: "cpu", Env: "prod", Host: "h1", Severity: "critical", Open: true, Text: "cpu high"}
+	_ = m.Handle(ctx, []rules.Transition{open}, t0)
+	got := strings.Join(due(t, st), "\n")
+	for _, want := range []string{"all|[CRITICAL]", "prod-critical>hook|[CRITICAL]", "prod-critical>mail|[CRITICAL]"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("I8 fan-out lacks %q:\n%s", want, got)
+		}
+	}
+	_ = m.Handle(ctx, []rules.Transition{{Key: "cpu/prod/h1", Rule: "cpu", Env: "prod", Host: "h1", Severity: "critical"}}, t0.Add(time.Minute))
+	if got := due(t, st); len(got) != 1 || !strings.HasPrefix(got[0], "all|[RESOLVED]") {
+		t.Fatalf("I9 send_resolved false: %q", got)
 	}
 }
 

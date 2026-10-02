@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thomkin/loglantern/internal/config"
+	"github.com/thomkin/loglantern/internal/notify"
 	"github.com/thomkin/loglantern/internal/record"
 	"github.com/thomkin/loglantern/internal/store"
 )
@@ -67,7 +69,7 @@ func TestReport(t *testing.T) {
 			t.Errorf("Y2 due at %s: %v", c.at, got)
 		}
 	}
-	if text, err := Send(ctx, st, []string{"uat"}, "daily", now); err != nil || !strings.HasPrefix(text, "Daily report") {
+	if text, err := Send(ctx, st, notify.NewOutbox(st, &config.Config{Routes: []config.Route{{Name: "daily", Send: []string{"tg/daily"}}}}), []string{"uat"}, "daily", now); err != nil || !strings.HasPrefix(text, "Daily report") {
 		t.Fatal(err)
 	}
 	if got, _ := Due(ctx, st, "06:00", now.Add(time.Hour)); got {
@@ -77,7 +79,7 @@ func TestReport(t *testing.T) {
 		t.Error("Y3 next day not due")
 	}
 	msgs, _ := st.Due(ctx, now, 10)
-	if len(msgs) != 1 || msgs[0].Route != "daily" {
+	if len(msgs) != 1 || msgs[0].Route != "daily" || msgs[0].Dest != "tg/daily" {
 		t.Errorf("Y4 queued: %+v", msgs)
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/thomkin/loglantern/internal/config"
 	"github.com/thomkin/loglantern/internal/hosts"
+	"github.com/thomkin/loglantern/internal/notify"
 	"github.com/thomkin/loglantern/internal/rules"
 	"github.com/thomkin/loglantern/internal/store"
 )
@@ -29,6 +30,7 @@ type Enricher func(ctx context.Context, in store.Incident, role, service string)
 // Manager opens and resolves incidents and queues their messages.
 type Manager struct {
 	st      *store.Store
+	out     *notify.Outbox
 	routes  []config.Route
 	service map[string]string // rule -> service of its matcher
 	roleOf  func(env, host string) string
@@ -39,7 +41,7 @@ type Manager struct {
 
 // New creates a manager. enrich may be nil.
 func New(st *store.Store, cfg *config.Config, roleOf func(env, host string) string, enrich Enricher, log *slog.Logger) *Manager {
-	m := &Manager{st: st, routes: cfg.Routes, service: map[string]string{}, roleOf: roleOf, enrich: enrich, log: log, bg: make(chan struct{}, 2)}
+	m := &Manager{st: st, out: notify.NewOutbox(st, cfg), routes: cfg.Routes, service: map[string]string{}, roleOf: roleOf, enrich: enrich, log: log, bg: make(chan struct{}, 2)}
 	for _, r := range cfg.Rules {
 		m.service[r.Name] = r.Match.Service
 	}
@@ -81,7 +83,7 @@ func (m *Manager) Handle(ctx context.Context, ts []rules.Transition, now time.Ti
 				continue // already open (e.g. after a restart)
 			}
 			in.ID = id
-			if err := m.queue(ctx, t, id, OpenText(in), now); err != nil {
+			if err := m.queue(ctx, t, id, OpenText(in), false, now); err != nil {
 				return err
 			}
 			if m.enrich != nil {
@@ -99,7 +101,7 @@ func (m *Manager) Handle(ctx context.Context, ts []rules.Transition, now time.Ti
 		if t.Text != "" && t.Rule == HostRule {
 			in.Text = t.Text
 		}
-		if err := m.queue(ctx, t, in.ID, ResolvedText(in, now), now); err != nil {
+		if err := m.queue(ctx, t, in.ID, ResolvedText(in, now), true, now); err != nil {
 			return err
 		}
 	}
@@ -118,14 +120,14 @@ func (m *Manager) Routes(t rules.Transition) []string {
 	return out
 }
 
-func (m *Manager) queue(ctx context.Context, t rules.Transition, id int64, text string, now time.Time) error {
+func (m *Manager) queue(ctx context.Context, t rules.Transition, id int64, text string, resolved bool, now time.Time) error {
 	routes := m.Routes(t)
 	if len(routes) == 0 {
 		m.log.Debug("no route", "key", t.Key)
 	}
 	for _, r := range routes {
-		if err := m.st.Enqueue(ctx, r, text, id, now); err != nil {
-			return fmt.Errorf("enqueue %s: %w", r, err)
+		if err := m.out.Put(ctx, r, text, id, resolved, now); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -156,9 +158,9 @@ func (m *Manager) followUp(in store.Incident, t rules.Transition) {
 			msg := fmt.Sprintf("[AI %s] %s/%s #%d: %s", n.Agent, in.Env, in.Host, in.ID, n.Text)
 			var err error
 			if n.Route != "" {
-				err = m.st.Enqueue(ctx, n.Route, msg, in.ID, time.Now())
+				err = m.out.Put(ctx, n.Route, msg, in.ID, false, time.Now())
 			} else {
-				err = m.queue(ctx, t, in.ID, msg, time.Now())
+				err = m.queue(ctx, t, in.ID, msg, false, time.Now())
 			}
 			if err != nil {
 				m.log.Warn("ai message", "err", err)

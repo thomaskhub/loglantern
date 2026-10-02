@@ -44,10 +44,10 @@ rules:
 `, wantErr: "duplicate"},
 		{name: "C5_route_topic_missing", yaml: minimal + `
 notifiers:
-  telegram: {token_env: LL_TG, chat_id: "-1", topics: {alarms: 2}}
+  tg: {telegram: {token_env: LL_TG, chat_id: "-1", topics: {alarms: 2}}}
 routes:
-  - {name: r, notifier: telegram, target: reports}
-`, wantErr: `topic "reports"`},
+  - {name: r, send: [tg/reports]}
+`, wantErr: `tg has no target "reports"`},
 		{name: "C6_ai_and_lightsail_need_secrets", yaml: minimal + `
 ai: {model: m, key_env: LL_AI}
 lightsail: {regions: [eu-central-1], access_key_env: LL_AK, secret_key_env: LL_SK}
@@ -108,7 +108,7 @@ func TestParseDurationDays(t *testing.T) {
 
 func TestAgents(t *testing.T) {
 	t.Setenv("LL_T", "t")
-	base := "envs: {uat: {ingest_token_env: LL_T}}\nroutes: [{name: all, notifier: webhook}]\nnotifiers: {webhook: {url_env: LL_T}}\nai:\n  model: m\n"
+	base := "envs: {uat: {ingest_token_env: LL_T}}\nroutes: [{name: all, send: [hook]}]\nnotifiers: {hook: {webhook: {url_env: LL_T}}}\nai:\n  model: m\n"
 	c, err := Parse([]byte(base))
 	if err != nil {
 		t.Fatal(err)
@@ -134,5 +134,55 @@ func TestAgents(t *testing.T) {
 	}
 	if _, err := Parse([]byte(strings.Replace(base, "  model: m\n", "  agents: [{name: x, on: incident_open}]\n", 1))); err == nil {
 		t.Error("G7 agent without any model accepted")
+	}
+}
+
+func TestNotifiers(t *testing.T) {
+	t.Setenv("LL_T", "t")
+	base := "envs: {uat: {ingest_token_env: LL_T}}\n"
+	c, err := Parse([]byte(base + `
+notifiers:
+  tg:   {telegram: {token_env: LL_T, chat_id: "-1", topics: {ops: 2}}}
+  sl:   {slack: {token_env: LL_T, channels: {ops: C1}}}
+  hook: {slack: {webhook_url_env: LL_T}}
+  mail: {email: {host: smtp.example.org, from: a@example.org, to: [b@example.org], targets: {mgmt: [c@example.org]}}}
+  ssl:  {email: {host: smtp.example.org, port: 465, from: a@example.org, to: [b@example.org]}}
+  wh:   {webhook: {url_env: LL_T}}
+routes:
+  - {name: r, send: [tg/ops, sl/ops, hook, mail/mgmt, ssl, wh/anything], digest: 1h, send_resolved: false}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c.Notifiers["mail"].Email
+	if m.Port != 587 || m.TLS != "starttls" || m.SubjectPrefix != "[loglantern]" || c.Notifiers["ssl"].Email.TLS != "tls" {
+		t.Errorf("N11 email defaults: %+v %+v", m, c.Notifiers["ssl"].Email)
+	}
+	if r := c.Routes[0]; r.Resolved() || r.Digest.D() != time.Hour || c.Notifiers["sl"].Type() != "slack" {
+		t.Errorf("N11 route: %+v", r)
+	}
+	if n, tgt := SplitDest("tg/ops/x"); n != "tg" || tgt != "ops/x" {
+		t.Errorf("SplitDest: %s %s", n, tgt)
+	}
+	for name, y := range map[string]string{
+		"two types":         "notifiers: {x: {webhook: {url_env: LL_T}, telegram: {token_env: LL_T, chat_id: '1'}}}",
+		"no type":           "notifiers: {x: {}}",
+		"unknown type":      "notifiers: {x: {discord: {url_env: LL_T}}}",
+		"unknown notifier":  "routes: [{name: r, send: [nope]}]",
+		"empty send":        "notifiers: {x: {webhook: {url_env: LL_T}}}\nroutes: [{name: r, send: []}]",
+		"unknown topic":     "notifiers: {x: {telegram: {token_env: LL_T, chat_id: '1', topics: {a: 1}}}}\nroutes: [{name: r, send: [x/b]}]",
+		"slack both":        "notifiers: {x: {slack: {token_env: LL_T, webhook_url_env: LL_T, channel: C}}}",
+		"slack no channel":  "notifiers: {x: {slack: {token_env: LL_T}}}",
+		"slack hook+chan":   "notifiers: {x: {slack: {webhook_url_env: LL_T, channel: C}}}",
+		"slack hook target": "notifiers: {x: {slack: {webhook_url_env: LL_T}}}\nroutes: [{name: r, send: [x/ops]}]",
+		"email no to":       "notifiers: {x: {email: {host: h, from: a@b.c}}}",
+		"email bad tls":     "notifiers: {x: {email: {host: h, from: a@b.c, to: [d@e.f], tls: maybe}}}",
+		"email half auth":   "notifiers: {x: {email: {host: h, from: a@b.c, to: [d@e.f], user_env: LL_T}}}",
+		"bad name":          "notifiers: {Bad/Name: {webhook: {url_env: LL_T}}}",
+		"old syntax":        "notifiers: {telegram: {token_env: LL_T, chat_id: '1'}}",
+	} {
+		if _, err := Parse([]byte(base + y)); err == nil {
+			t.Errorf("N12 %s accepted", name)
+		}
 	}
 }

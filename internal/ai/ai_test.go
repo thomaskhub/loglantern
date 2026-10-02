@@ -103,8 +103,8 @@ func TestAgents(t *testing.T) {
 	_ = os.WriteFile(cfgPath, []byte(`
 storage: {path: `+filepath.Join(dir, "x.db")+`}
 envs: {uat: {ingest_token_env: LL_T}}
-routes: [{name: all, notifier: webhook}, {name: dba, notifier: webhook}]
-notifiers: {webhook: {url_env: LL_T}}
+routes: [{name: all, send: [hook]}, {name: dba, send: [hook]}]
+notifiers: {hook: {webhook: {url_env: LL_T}}}
 ai:
   base_url: `+srv.URL+`
   key_env: LL_AI

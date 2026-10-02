@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -105,21 +106,31 @@ func (f *flaky) Send(_ context.Context, target, text string) error {
 	return nil
 }
 
-func TestSenderRetriesExactlyOnce(t *testing.T) {
+func newSender(t *testing.T, routes []config.Route, n map[string]Notifier, now *time.Time) (*Sender, *Outbox, *store.Store) {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "ll.db"), 8)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	t.Cleanup(func() { _ = st.Close() })
+	cfg := &config.Config{Routes: routes}
+	s := NewSender(st, cfg, n, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.Now = func() time.Time { return *now }
+	return s, NewOutbox(st, cfg), st
+}
+
+func TestSenderRetriesExactlyOnce(t *testing.T) {
 	ctx := context.Background()
 	f := &flaky{down: true}
 	now := t0
-	cfg := &config.Config{Routes: []config.Route{{Name: "all", Notifier: "telegram", Target: "alerts"}, {Name: "gone", Notifier: "pager"}}}
-	s := NewSender(st, cfg, map[string]Notifier{"telegram": f}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	s.Now = func() time.Time { return now }
-	_ = st.Enqueue(ctx, "all", "one", 0, now)
-	_ = st.Enqueue(ctx, "all", "two", 0, now)
-	_ = st.Enqueue(ctx, "gone", "x", 0, now)
+	s, out, st := newSender(t, []config.Route{{Name: "all", Send: []string{"tg/alerts"}}, {Name: "gone", Send: []string{"pager"}}},
+		map[string]Notifier{"tg": f}, &now)
+	_ = out.Put(ctx, "all", "one", 0, false, now)
+	_ = out.Put(ctx, "all", "two", 0, false, now)
+	_ = out.Put(ctx, "gone", "x", 0, false, now)
+	if err := out.Put(ctx, "nope", "x", 0, false, now); err == nil {
+		t.Fatal("unknown route accepted")
+	}
 
 	if n := s.Once(ctx); n != 0 {
 		t.Fatalf("A3 sent while down: %d", n)
@@ -143,6 +154,70 @@ func TestSenderRetriesExactlyOnce(t *testing.T) {
 	}
 	if n, _ := st.PendingCount(ctx); n != 1 {
 		t.Fatalf("unknown notifier stays pending: %d", n)
+	}
+}
+
+func TestFanOutAndDigest(t *testing.T) {
+	ctx := context.Background()
+	tg, mail := &flaky{}, &flaky{}
+	now := t0
+	s, out, _ := newSender(t, []config.Route{
+		{Name: "now", Send: []string{"tg/ops", "mail"}},
+		{Name: "hourly", Send: []string{"mail/mgmt"}, Digest: config.Duration(time.Hour)},
+	}, map[string]Notifier{"tg": tg, "mail": mail}, &now)
+	_ = out.Put(ctx, "now", "fire", 0, false, now)
+	_ = out.Put(ctx, "hourly", "first", 0, false, now)
+	now = now.Add(20 * time.Minute)
+	_ = out.Put(ctx, "hourly", "second", 0, false, now)
+	if n := s.Once(ctx); n != 2 || len(tg.texts) != 1 || mail.texts[0] != "|fire" {
+		t.Fatalf("N7 fan-out: %d %v %v", n, tg.texts, mail.texts)
+	}
+	now = t0.Add(59 * time.Minute)
+	if n := s.Once(ctx); n != 0 {
+		t.Fatal("N8 digest sent early")
+	}
+	now = t0.Add(time.Hour)
+	if n := s.Once(ctx); n != 2 || len(mail.texts) != 2 || mail.texts[1] != "mgmt|Digest: 2 message(s)\n\nfirst\n\nsecond" {
+		t.Fatalf("N8 one bundle with both messages: %d %q", n, mail.texts)
+	}
+	// N9 big digests are split below the size limit, nothing lost
+	for i := range 30 {
+		_ = out.Put(ctx, "hourly", fmt.Sprintf("%02d %s", i, strings.Repeat("x", 300)), 0, false, now)
+	}
+	now = now.Add(2 * time.Hour)
+	s.Once(ctx)
+	for _, m := range mail.texts[2:] {
+		if len(m) > digestChunk+100 {
+			t.Errorf("N9 chunk too big: %d", len(m))
+		}
+	}
+	total := strings.Count(strings.Join(mail.texts[2:], ""), strings.Repeat("x", 300))
+	if len(mail.texts) < 5 || total != 30 {
+		t.Fatalf("N9 chunks %d, messages %d", len(mail.texts)-2, total)
+	}
+}
+
+type limited struct{ calls int }
+
+func (l *limited) Send(context.Context, string, string) error {
+	l.calls++
+	return &RetryAfter{Wait: time.Minute, Err: errors.New("slow down")}
+}
+
+func TestRetryAfterBlocksNotifier(t *testing.T) {
+	ctx := context.Background()
+	l, other := &limited{}, &flaky{}
+	now := t0
+	s, out, st := newSender(t, []config.Route{{Name: "r", Send: []string{"tg", "mail"}}}, map[string]Notifier{"tg": l, "mail": other}, &now)
+	for range 3 {
+		_ = out.Put(ctx, "r", "x", 0, false, now)
+	}
+	s.Once(ctx)
+	if l.calls != 1 || len(other.texts) != 3 {
+		t.Fatalf("N10 throttled notifier tried once per round, others go on: %d %d", l.calls, len(other.texts))
+	}
+	if ms, _ := st.Due(ctx, now.Add(59*time.Second), 10); len(ms) != 2 {
+		t.Fatalf("N10 retry_after respected: %d due", len(ms))
 	}
 }
 

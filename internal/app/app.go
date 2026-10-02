@@ -50,6 +50,7 @@ type App struct {
 	api    *api.Server
 	envs   []string
 	agents *ai.Agents // nil when AI is off
+	out    *notify.Outbox
 	bgWork sync.WaitGroup
 
 	in   chan []record.Record
@@ -78,6 +79,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		return nil, err
 	}
 	a.st = st
+	a.out = notify.NewOutbox(st, cfg)
 	if err := a.restore(ctx); err != nil {
 		_ = st.Close()
 		return nil, err
@@ -362,7 +364,7 @@ func (a *App) Tick(ctx context.Context) {
 		if due, err := report.Due(ctx, a.st, r.At, now); err != nil {
 			a.log.Error("report", "err", err)
 		} else if due {
-			text, err := report.Send(ctx, a.st, a.envs, r.Route, now)
+			text, err := report.Send(ctx, a.st, a.out, a.envs, r.Route, now)
 			if err != nil {
 				a.log.Error("report", "err", err)
 			} else if a.agents != nil && a.agents.Has(config.OnDailyReport) {
@@ -385,7 +387,7 @@ func (a *App) reviewReport(text, route string) {
 		}
 		for _, n := range notes {
 			to := cmp.Or(n.Route, route)
-			if err := a.st.Enqueue(ctx, to, "[AI "+n.Agent+"] "+n.Text, 0, time.Now()); err != nil {
+			if err := a.out.Put(ctx, to, "[AI "+n.Agent+"] "+n.Text, 0, false, time.Now()); err != nil {
 				a.log.Warn("ai report message", "err", err)
 			}
 		}

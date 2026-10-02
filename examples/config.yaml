@@ -86,21 +86,42 @@ rules:
     for: 10m
     severity: critical
 
-# every route whose matcher fits gets the message
-routes:
-  - {name: prod-alerts, notifier: telegram, target: prod, match: {env: prod}}
-  - {name: uat-alerts, notifier: telegram, target: uat, match: {env: uat}}
-  - {name: db, notifier: telegram, target: db, match: {role: db}}
-  - {name: pager, notifier: webhook, match: {env: prod, severity: [critical]}}
-  - {name: daily, notifier: telegram, target: reports}
-
+# notifiers: named outputs, each with exactly one type (telegram, slack, email, webhook)
 notifiers:
-  telegram:
-    token_env: LOGLANTERN_TELEGRAM_TOKEN
-    chat_id: "-1001234567890"      # a forum group: one topic per target
-    topics: {prod: 2, uat: 3, db: 4, reports: 5}
-  webhook:
-    url_env: LOGLANTERN_WEBHOOK_URL
+  tg:                                   # a Telegram forum group: one topic per target
+    telegram:
+      token_env: LOGLANTERN_TELEGRAM_TOKEN
+      chat_id: "-1001234567890"
+      topics: {prod: 2, uat: 3, db: 4, ai: 5, reports: 6}
+  team:                                 # Slack bot (chat:write); or {webhook_url_env: …} for one channel
+    slack:
+      token_env: LOGLANTERN_SLACK_TOKEN
+      channel: C0000DEFAULT
+      channels: {prod: C0000PROD}
+  mail:                                 # any SMTP relay; port 587 STARTTLS by default
+    email:
+      host: smtp.example.org
+      user_env: LOGLANTERN_SMTP_USER
+      password_env: LOGLANTERN_SMTP_PASSWORD
+      from: alerts@example.org
+      to: [ops@example.org]
+      targets: {mgmt: [cto@example.org]}
+  pager:
+    webhook: {url_env: LOGLANTERN_WEBHOOK_URL}
+
+# routes: every route whose match fits gets the message; send lists "notifier" or "notifier/target"
+routes:
+  - {name: prod, match: {env: prod}, send: [tg/prod, team/prod]}
+  - {name: uat,  match: {env: uat},  send: [tg/uat]}
+  - {name: db,   match: {role: db},  send: [tg/db]}
+  - {name: pager, match: {env: prod, severity: [critical]}, send: [pager]}
+  - name: mgmt
+    match: {env: prod, severity: [critical]}
+    send: [mail/mgmt]
+    digest: 1h                          # one bundled mail per hour at most
+    send_resolved: false
+  - {name: ai,    send: [tg/ai]}
+  - {name: daily, send: [tg/reports, mail]}
 
 # optional AI agents: one call each, no tools; answers are sent as follow-up messages
 # and never decide alarms. Without "agents" one default "explain" agent runs on every incident.
