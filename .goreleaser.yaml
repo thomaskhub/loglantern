@@ -16,6 +16,7 @@ archives:
       - LICENSE
       - README.md
       - CHANGELOG.md
+      - examples/*
       - examples/**/*
 
 checksum:
