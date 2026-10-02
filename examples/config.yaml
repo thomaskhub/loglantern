@@ -1,0 +1,136 @@
+# loglantern example configuration. Secrets are never written here: every *_env names an
+# environment variable (e.g. from a systemd EnvironmentFile).
+
+listen:
+  ingest: "0.0.0.0:8440"   # Fluent Bit; keep it on the private network
+  api: "127.0.0.1:8441"    # dashboards; put a TLS reverse proxy in front
+
+ingest:
+  mask_emails: true
+
+storage:
+  path: /var/lib/loglantern/loglantern.db
+  cache_mb: 32
+  retention: {logs: 5d, metrics: 5d, counters: 90d, incidents: 90d}
+
+# one ingest token per environment: the token decides the environment of every record
+envs:
+  uat:  {ingest_token_env: LOGLANTERN_TOKEN_UAT}
+  prod: {ingest_token_env: LOGLANTERN_TOKEN_PROD}
+
+# known hosts are reported as missing even if they never sent anything
+hosts:
+  - {env: prod, host: web-1, role: web}
+  - {env: prod, host: db-1, role: db}
+missing_after: 3m
+tick: 15s
+window: 2h
+
+rules:
+  - name: cpu-high
+    type: threshold
+    series: cpu.cpu_p
+    op: ">"
+    value: "90"
+    for: 10m
+    severity: warning
+  - name: mem-high
+    type: threshold
+    series: mem.Mem.used_pct      # facts or metrics you send
+    op: ">="
+    value: "90"
+    for: 5m
+  - name: disk-full
+    type: threshold
+    series: disk.used_pct          # from a check fact: {"fact":"disk","used_pct":93}
+    op: ">="
+    value: "85"
+    severity: critical
+    match: {role: db}
+  - name: backup-failed
+    type: text
+    series: backup.status          # {"fact":"backup","status":"failed"}
+    op: "!="
+    value: ok
+    severity: critical
+    text: "{rule} on {host}: {detail}"
+  - name: error-burst
+    type: lograte
+    level: err                     # error and worse
+    count: 20
+    per: 5m
+  - name: oom
+    type: lograte
+    pattern: "Out of memory|oom-kill"
+    count: 1
+    per: 5m
+    severity: critical
+  - name: traffic-anomaly
+    type: anomaly
+    series: app.requests_per_min
+    zscore: 4
+    min_samples: 30
+    min_delta: 50
+    severity: info
+  - name: cpu-credits-low
+    type: threshold
+    series: lightsail.burst_pct
+    op: "<"
+    value: "20"
+    for: 30m
+  - name: site-down
+    type: threshold
+    series: probe.website.up
+    op: "<"
+    value: "1"
+    for: 10m
+    severity: critical
+
+# every route whose matcher fits gets the message
+routes:
+  - {name: prod-alerts, notifier: telegram, target: prod, match: {env: prod}}
+  - {name: uat-alerts, notifier: telegram, target: uat, match: {env: uat}}
+  - {name: db, notifier: telegram, target: db, match: {role: db}}
+  - {name: pager, notifier: webhook, match: {env: prod, severity: [critical]}}
+  - {name: daily, notifier: telegram, target: reports}
+
+notifiers:
+  telegram:
+    token_env: LOGLANTERN_TELEGRAM_TOKEN
+    chat_id: "-1001234567890"      # a forum group: one topic per target
+    topics: {prod: 2, uat: 3, db: 4, reports: 5}
+  webhook:
+    url_env: LOGLANTERN_WEBHOOK_URL
+
+# optional: a short explanation follows each new incident (never decides alarms)
+ai:
+  model: openai/gpt-4o-mini
+  key_env: OPENROUTER_API_KEY
+  daily_calls: 50
+
+probes:
+  - {name: website, env: prod, url: "https://www.example.org/health", contains: ok}
+
+# optional: CPU burst capacity of Lightsail instances; off unless both variables are set
+lightsail:
+  regions: [eu-central-1]
+  access_key_env: LOGLANTERN_AWS_ACCESS_KEY_ID
+  secret_key_env: LOGLANTERN_AWS_SECRET_ACCESS_KEY
+  interval: 15m
+  instances:
+    web-1-instance: {env: prod, host: web-1}
+    db-1-instance: {env: prod, host: db-1}
+
+report: {at: "06:00", route: daily}
+
+auth:
+  api_keys:
+    - {name: status-board, key_env: LOGLANTERN_KEY_BOARD, role: viewer, envs: [prod]}
+  jwt:
+    - name: admin-app
+      public_key_file: /etc/loglantern/admin-app.pem
+      roles:
+        logs:   [{claim: permissions.admin, equals: true}, {claim: permissions.developer, equals: true}]
+        viewer: [{claim: permissions.staff, equals: true}]
+
+cors: ["https://admin.example.org"]

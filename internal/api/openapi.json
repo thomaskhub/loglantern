@@ -1,0 +1,921 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "loglantern API",
+  "version": "1",
+  "description": "Read-only API for dashboards. Bearer API key or JWT. Role viewer: status, incidents, series, counters. Role logs: also log lines."
+ },
+ "security": [
+  {
+   "bearer": []
+  }
+ ],
+ "paths": {
+  "/api/v1/health": {
+   "get": {
+    "security": [],
+    "summary": "Liveness and internal counters",
+    "responses": {
+     "200": {
+      "description": "OK",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/me": {
+   "get": {
+    "summary": "The caller",
+    "responses": {
+     "200": {
+      "description": "Caller",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Principal"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/hosts": {
+   "get": {
+    "summary": "Hosts with heartbeat status and last values",
+    "parameters": [
+     {
+      "name": "env",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated environments (default: all permitted)",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Hosts",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "hosts": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Host"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/incidents": {
+   "get": {
+    "summary": "Incidents, newest first",
+    "parameters": [
+     {
+      "name": "env",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated environments (default: all permitted)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "description": "open or resolved",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "since",
+      "in": "query",
+      "required": false,
+      "description": "Opened after (default 7 days)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "Max 500, default 100",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Incidents",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "incidents": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Incident"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/series": {
+   "get": {
+    "summary": "One metric series (1-minute points)",
+    "parameters": [
+     {
+      "name": "env",
+      "in": "query",
+      "required": true,
+      "description": "Environment",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "host",
+      "in": "query",
+      "required": true,
+      "description": "Host",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "name",
+      "in": "query",
+      "required": true,
+      "description": "Series name, e.g. cpu.cpu_p",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "from",
+      "in": "query",
+      "required": false,
+      "description": "RFC 3339, unix seconds or a duration back from now (e.g. 90m)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": false,
+      "description": "Same formats as from (default now)",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Points",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "env": {
+           "type": "string"
+          },
+          "host": {
+           "type": "string"
+          },
+          "name": {
+           "type": "string"
+          },
+          "points": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Point"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/series/names": {
+   "get": {
+    "summary": "Series names of a host (last 24 h)",
+    "parameters": [
+     {
+      "name": "env",
+      "in": "query",
+      "required": true,
+      "description": "Environment",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "host",
+      "in": "query",
+      "required": true,
+      "description": "Host",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Names",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "names": {
+           "type": "array",
+           "items": {
+            "type": "string"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/counters": {
+   "get": {
+    "summary": "Log lines per hour and level",
+    "parameters": [
+     {
+      "name": "env",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated environments (default: all permitted)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "from",
+      "in": "query",
+      "required": false,
+      "description": "RFC 3339, unix seconds or a duration back from now (e.g. 90m)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": false,
+      "description": "Same formats as from (default now)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "by",
+      "in": "query",
+      "required": false,
+      "description": "host or service",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Counters",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "counters": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Counter"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/logs": {
+   "get": {
+    "summary": "Log lines, newest first (role logs)",
+    "parameters": [
+     {
+      "name": "env",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated environments (default: all permitted)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "host",
+      "in": "query",
+      "required": false,
+      "description": "Host",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "service",
+      "in": "query",
+      "required": false,
+      "description": "Service",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "level",
+      "in": "query",
+      "required": false,
+      "description": "Max syslog level 0-7 (default 7)",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "description": "Text contained in the message",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "from",
+      "in": "query",
+      "required": false,
+      "description": "RFC 3339, unix seconds or a duration back from now (e.g. 90m)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": false,
+      "description": "Same formats as from (default now)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "cursor",
+      "in": "query",
+      "required": false,
+      "description": "Value of next from the previous page",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "Max 1000, default 200",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Page",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "logs": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/LogLine"
+           }
+          },
+          "next": {
+           "type": [
+            "string",
+            "null"
+           ]
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/events": {
+   "get": {
+    "summary": "Server-sent events: incident and host changes",
+    "description": "EventSource cannot send headers: pass ?access_token=. Event types: incident (Incident), host (Host).",
+    "parameters": [
+     {
+      "name": "env",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated environments (default: all permitted)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "access_token",
+      "in": "query",
+      "required": false,
+      "description": "Token for EventSource",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "text/event-stream",
+      "content": {
+       "text/event-stream": {
+        "schema": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "securitySchemes": {
+   "bearer": {
+    "type": "http",
+    "scheme": "bearer"
+   }
+  },
+  "schemas": {
+   "Error": {
+    "type": "object",
+    "properties": {
+     "error": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "error"
+    ]
+   },
+   "Principal": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "role": {
+      "type": "string",
+      "enum": [
+       "viewer",
+       "logs"
+      ]
+     },
+     "envs": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   },
+   "Host": {
+    "type": "object",
+    "properties": {
+     "env": {
+      "type": "string"
+     },
+     "host": {
+      "type": "string"
+     },
+     "ip": {
+      "type": "string"
+     },
+     "role": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "up",
+       "missing",
+       "unknown"
+      ]
+     },
+     "last_seen": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time"
+     },
+     "known": {
+      "type": "boolean"
+     },
+     "last": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "number"
+      }
+     }
+    }
+   },
+   "Incident": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "integer"
+     },
+     "key": {
+      "type": "string"
+     },
+     "rule": {
+      "type": "string"
+     },
+     "env": {
+      "type": "string"
+     },
+     "host": {
+      "type": "string"
+     },
+     "severity": {
+      "type": "string",
+      "enum": [
+       "info",
+       "warning",
+       "critical"
+      ]
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "open",
+       "resolved"
+      ]
+     },
+     "opened": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "resolved": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time"
+     },
+     "text": {
+      "type": "string"
+     },
+     "ai_text": {
+      "type": "string"
+     }
+    }
+   },
+   "Point": {
+    "type": "object",
+    "properties": {
+     "t": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "v": {
+      "type": "number"
+     }
+    }
+   },
+   "Counter": {
+    "type": "object",
+    "properties": {
+     "hour": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "env": {
+      "type": "string"
+     },
+     "host": {
+      "type": "string"
+     },
+     "service": {
+      "type": "string"
+     },
+     "level": {
+      "type": "integer"
+     },
+     "n": {
+      "type": "integer"
+     }
+    }
+   },
+   "LogLine": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "integer"
+     },
+     "ts": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "env": {
+      "type": "string"
+     },
+     "host": {
+      "type": "string"
+     },
+     "service": {
+      "type": "string"
+     },
+     "level": {
+      "type": "integer"
+     },
+     "msg": {
+      "type": "string"
+     },
+     "fields": {
+      "type": "object"
+     }
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,27 @@
+[Unit]
+Description=loglantern monitoring
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/loglantern -config /etc/loglantern/config.yaml
+EnvironmentFile=/etc/loglantern/secrets.env
+User=loglantern
+Group=loglantern
+StateDirectory=loglantern
+Restart=always
+RestartSec=5
+# small VMs: keep memory bounded
+MemoryMax=200M
+Environment=GOMEMLIMIT=120MiB
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/loglantern
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
