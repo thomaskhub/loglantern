@@ -216,3 +216,20 @@ func TestHostsAndRetention(t *testing.T) {
 		t.Errorf("R2 %v", logs)
 	}
 }
+
+func TestLastSeen(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	_ = s.Write(ctx, []record.Record{
+		{Kind: record.KindMetric, TS: t0, Env: "uat", Host: "db1", Values: map[string]float64{"backup.age_h": 1}},
+		{Kind: record.KindMetric, TS: t0.Add(time.Hour), Env: "uat", Host: "db1", Values: map[string]float64{"backup.age_h": 2, "cpu.cpu_p": 1}},
+		{Kind: record.KindFact, TS: t0.Add(2 * time.Hour), Env: "uat", Host: "db2", Texts: map[string]string{"backup.status": "ok"}},
+	})
+	got := map[string]time.Time{}
+	if err := s.LastSeen(ctx, []string{"backup.age_h", "backup.status"}, func(env, host, name string, t time.Time) { got[host+"/"+name] = t }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !got["db1/backup.age_h"].Equal(t0.Add(time.Hour).Truncate(time.Minute)) || !got["db2/backup.status"].Equal(t0.Add(2*time.Hour).Truncate(time.Minute)) {
+		t.Fatalf("LS1: %v", got)
+	}
+}

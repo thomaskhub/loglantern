@@ -156,6 +156,7 @@ const (
 	RuleText      = "text"      // text fact op value
 	RuleLogRate   = "lograte"   // matching log lines per window >= count
 	RuleAnomaly   = "anomaly"   // z-score against the series' own window
+	RuleAbsent    = "absent"    // a series that was reported before has no value for max_age
 )
 
 // Severities, from low to high.
@@ -181,6 +182,7 @@ type Rule struct {
 	ZScore     float64 `yaml:"zscore"`
 	MinSamples int     `yaml:"min_samples"`
 	MinDelta   float64 `yaml:"min_delta"`
+	MaxAge     Duration `yaml:"max_age"` // absent
 }
 
 // Route sends matching incidents (and reports, AI answers) to one or more destinations.
@@ -707,8 +709,12 @@ func (c *Config) validate() error {
 			if r.Series == "" {
 				bad("rules.%s: anomaly needs series", r.Name)
 			}
+		case RuleAbsent:
+			if r.Series == "" || r.MaxAge <= 0 {
+				bad("rules.%s: absent needs series and max_age", r.Name)
+			}
 		default:
-			bad("rules.%s: type must be threshold, text, lograte or anomaly", r.Name)
+			bad("rules.%s: type must be threshold, text, lograte, anomaly or absent", r.Name)
 		}
 	}
 	for i, p := range c.Probes {

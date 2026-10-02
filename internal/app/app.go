@@ -145,6 +145,9 @@ func (a *App) restore(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("restore window: %w", err)
 	}
+	if err := a.st.LastSeen(ctx, a.eng.AbsentSeries(), a.eng.ObserveSeen); err != nil {
+		return fmt.Errorf("restore last seen: %w", err)
+	}
 	var per time.Duration // logs are only needed for lograte rules
 	for _, r := range a.cfg.Rules {
 		if r.Type == config.RuleLogRate {

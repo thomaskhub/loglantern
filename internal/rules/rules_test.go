@@ -174,3 +174,32 @@ func TestNewErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestAbsent(t *testing.T) {
+	r := config.Rule{Name: "backup-missing", Type: "absent", Series: "backup.age_h", MaxAge: dur(26 * time.Hour), Match: config.Match{Role: "db"}}
+	e := engine(t, r)
+	val(e, "db1", "backup.age_h", t0, 3)
+	val(e, "h1", "backup.age_h", t0, 3) // role api: not watched
+	e.Observe(record.Record{Kind: record.KindFact, Env: "uat", Host: "db1", TS: t0, Texts: map[string]string{"backup.status": "ok"}})
+	if got := keys(e.Evaluate(t0.Add(25 * time.Hour))); got != "" {
+		t.Fatalf("E10 within max_age: %q", got)
+	}
+	tr := e.Evaluate(t0.Add(27 * time.Hour))
+	if keys(tr) != "open:backup-missing/uat/db1" || !strings.Contains(tr[0].Text, "no backup.age_h since 2026-10-02 12:00 UTC") {
+		t.Fatalf("E10 absent beyond window and max_age: %v", tr)
+	}
+	val(e, "db1", "backup.age_h", t0.Add(28*time.Hour), 1)
+	if got := keys(e.Evaluate(t0.Add(28 * time.Hour))); got != "resolve:backup-missing/uat/db1" {
+		t.Fatalf("E10 back: %q", got)
+	}
+	// E11 restart: last seen restored from the database
+	r2 := engine(t, r)
+	r2.ObserveSeen("uat", "db1", "backup.age_h", t0)
+	r2.ObserveSeen("uat", "db1", "cpu.cpu_p", t0) // not watched: ignored
+	if got := keys(r2.Evaluate(t0.Add(30 * time.Hour))); got != "open:backup-missing/uat/db1" {
+		t.Fatalf("E11 restored: %q", got)
+	}
+	if s := r2.AbsentSeries(); len(s) != 1 || s[0] != "backup.age_h" {
+		t.Fatalf("E11 series: %v", s)
+	}
+}

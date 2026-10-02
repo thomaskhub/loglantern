@@ -262,3 +262,27 @@ func (s *Store) LogsSince(ctx context.Context, t time.Time, fn func(LogLine)) er
 	}
 	return rows.Err()
 }
+
+// LastSeen calls fn with the newest minute of each (env, host, name) of these series, metrics and texts.
+func (s *Store) LastSeen(ctx context.Context, names []string, fn func(env, host, name string, t time.Time)) error {
+	if len(names) == 0 {
+		return nil
+	}
+	in := placeholders(len(names))
+	args := append(anys(names), anys(names)...)
+	rows, err := s.r.QueryContext(ctx, `SELECT env, host, name, max(minute) FROM metrics WHERE name IN `+in+` GROUP BY env, host, name
+		UNION ALL SELECT env, host, name, max(minute) FROM texts WHERE name IN `+in+` GROUP BY env, host, name`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var env, host, name string
+		var m int64
+		if err := rows.Scan(&env, &host, &name, &m); err != nil {
+			return err
+		}
+		fn(env, host, name, time.Unix(m, 0).UTC())
+	}
+	return rows.Err()
+}

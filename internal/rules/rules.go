@@ -68,12 +68,15 @@ type Engine struct {
 	hits    map[hitKey][]time.Time
 	pending map[string]time.Time // key → condition true since
 	active  map[string]bool
+	seen    map[seriesKey]time.Time // newest value of series watched by absent rules (kept beyond the window)
+	started time.Time
+	absent  map[string]bool // series names watched by absent rules
 }
 
 // New compiles the rules. roleOf resolves a host's role for "match.role".
 func New(rules []config.Rule, window time.Duration, roleOf func(env, host string) string) (*Engine, error) {
 	e := &Engine{window: window, roleOf: roleOf, series: map[seriesKey]*series{}, hits: map[hitKey][]time.Time{},
-		pending: map[string]time.Time{}, active: map[string]bool{}}
+		pending: map[string]time.Time{}, active: map[string]bool{}, seen: map[seriesKey]time.Time{}, absent: map[string]bool{}}
 	for _, r := range rules {
 		c := compiled{Rule: r, minLevel: record.LevelDebug}
 		if r.Pattern != "" {
@@ -97,9 +100,35 @@ func New(rules []config.Rule, window time.Duration, roleOf func(env, host string
 			}
 			c.num = v
 		}
+		if r.Type == config.RuleAbsent {
+			e.absent[r.Series] = true
+		}
 		e.rules = append(e.rules, c)
 	}
 	return e, nil
+}
+
+// ObserveSeen restores when a series watched by an absent rule last had a value (restart).
+func (e *Engine) ObserveSeen(env, host, name string, t time.Time) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.markSeen(seriesKey{env, host, name}, t)
+}
+
+// AbsentSeries returns the series names watched by absent rules.
+func (e *Engine) AbsentSeries() []string {
+	out := make([]string, 0, len(e.absent))
+	for n := range e.absent {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (e *Engine) markSeen(k seriesKey, t time.Time) {
+	if e.absent[k.name] && t.After(e.seen[k]) {
+		e.seen[k] = t
+	}
 }
 
 // SetActive marks keys as firing (open incidents after a restart) so they can resolve.
@@ -158,6 +187,7 @@ func (e *Engine) get(env, host, name string) *series {
 }
 
 func (e *Engine) addValue(env, host, name string, t time.Time, v float64) {
+	e.markSeen(seriesKey{env, host, name}, t)
 	s := e.get(env, host, name)
 	if n := len(s.points); n > 0 && t.Before(s.points[n-1].t) {
 		i := sort.Search(n, func(i int) bool { return s.points[i].t.After(t) })
@@ -168,6 +198,7 @@ func (e *Engine) addValue(env, host, name string, t time.Time, v float64) {
 }
 
 func (e *Engine) addText(env, host, name string, t time.Time, v string) {
+	e.markSeen(seriesKey{env, host, name}, t)
 	s := e.get(env, host, name)
 	if !t.Before(s.textT) {
 		s.text, s.textT = v, t
@@ -298,6 +329,16 @@ func (e *Engine) candidates(r compiled, now time.Time) []candidate {
 			}
 			if (r.Op == "==") == (s.text == r.Value) {
 				out = append(out, candidate{k.env, k.host, s.text, fmt.Sprintf("%s is %q", r.Series, s.text)})
+			}
+		}
+	case config.RuleAbsent:
+		for k, t := range e.seen {
+			if k.name != r.Series || !e.matches(r.Match, k.env, k.host) {
+				continue
+			}
+			if age := now.Sub(t); age > r.MaxAge.D() {
+				out = append(out, candidate{k.env, k.host, age.Round(time.Minute).String(),
+					fmt.Sprintf("no %s since %s", r.Series, t.UTC().Format("2006-01-02 15:04 UTC"))})
 			}
 		}
 	case config.RuleLogRate:
