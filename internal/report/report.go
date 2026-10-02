@@ -124,14 +124,14 @@ func clip(s string, n int) string {
 	return s
 }
 
-// Due reports whether today's report (at "HH:MM" UTC) is due and not yet sent.
-func Due(ctx context.Context, st *store.Store, at string, now time.Time) (bool, error) {
+// Due reports whether today's report (at "HH:MM" in loc) is due and not yet sent.
+func Due(ctx context.Context, st *store.Store, at string, loc *time.Location, now time.Time) (bool, error) {
 	t, err := time.Parse("15:04", at)
 	if err != nil {
 		return false, err
 	}
-	now = now.UTC()
-	slot := time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, time.UTC)
+	now = now.In(loc)
+	slot := time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, loc)
 	if now.Before(slot) {
 		return false, nil
 	}
@@ -143,7 +143,7 @@ func Due(ctx context.Context, st *store.Store, at string, now time.Time) (bool, 
 }
 
 // Send builds the report, queues it on route (once per day) and returns its text.
-func Send(ctx context.Context, st *store.Store, out *notify.Outbox, envs []string, route string, now time.Time) (string, error) {
+func Send(ctx context.Context, st *store.Store, out *notify.Outbox, envs []string, route string, loc *time.Location, now time.Time) (string, error) {
 	text, err := Build(ctx, st, envs, now)
 	if err != nil {
 		return "", err
@@ -151,5 +151,5 @@ func Send(ctx context.Context, st *store.Store, out *notify.Outbox, envs []strin
 	if err := out.Put(ctx, route, text, 0, false, now); err != nil {
 		return "", err
 	}
-	return text, st.SetMeta(ctx, metaKey, now.UTC().Format("2006-01-02"))
+	return text, st.SetMeta(ctx, metaKey, now.In(loc).Format("2006-01-02"))
 }

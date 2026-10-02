@@ -12,10 +12,13 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
+	_ "time/tzdata" // maintenance and report time zones on minimal images
 
 	"github.com/thomkin/loglantern/internal/app"
 	"github.com/thomkin/loglantern/internal/auth"
 	"github.com/thomkin/loglantern/internal/config"
+	"github.com/thomkin/loglantern/internal/rules"
 )
 
 var version = "dev"
@@ -24,7 +27,7 @@ func main() {
 	cfgPath := flag.String("config", "/etc/loglantern/config.yaml", "config file")
 	level := flag.String("log-level", "info", "debug, info, warn or error")
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "usage: loglantern [flags] [run|check-config|version]\n\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "usage: loglantern [flags] [run|check-config|version]\n\nSIGHUP reloads the config (listen addresses and storage.path need a restart).\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -64,10 +67,6 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	a, err := app.New(ctx, cfg, log)
-	if err != nil {
-		fatal(err)
-	}
 	ingestLn, err := net.Listen("tcp", cfg.Listen.Ingest)
 	if err != nil {
 		fatal(err)
@@ -76,10 +75,63 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	ingest, api := newHandoff(ingestLn), newHandoff(apiLn)
+	defer ingest.Close()
+	defer api.Close()
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
 	log.Info("loglantern started", "version", version, "ingest", cfg.Listen.Ingest, "api", cfg.Listen.API, "db", cfg.Storage.Path)
-	if err := a.Run(ctx, ingestLn, apiLn); err != nil {
-		fatal(err)
+	for {
+		a, err := app.New(ctx, cfg, log)
+		if err != nil {
+			fatal(err)
+		}
+		genCtx, next := context.WithCancel(ctx)
+		go func() {
+			for {
+				select {
+				case <-genCtx.Done():
+					return
+				case <-hup:
+				}
+				newCfg, err := reload(*cfgPath, cfg)
+				if err != nil {
+					log.Error("reload rejected, keeping the running config", "err", err)
+					continue
+				}
+				log.Info("reloading config")
+				cfg = newCfg
+				next()
+				return
+			}
+		}()
+		if err := a.Run(genCtx, ingest.generation(), api.generation()); err != nil {
+			fatal(err)
+		}
+		next()
+		if ctx.Err() != nil {
+			return
+		}
+		log.Info("config reloaded")
 	}
+}
+
+// reload loads and checks a new config; listen addresses and the database path need a restart.
+func reload(path string, old *config.Config) (*config.Config, error) {
+	c, err := config.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	if c.Listen != old.Listen || c.Storage.Path != old.Storage.Path {
+		return nil, fmt.Errorf("listen and storage.path cannot change on reload; restart instead")
+	}
+	if _, err := auth.New(c); err != nil {
+		return nil, err
+	}
+	if _, err := rules.New(c.Rules, time.Duration(c.Window), nil); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 // summary prints what the config enables, without secrets.

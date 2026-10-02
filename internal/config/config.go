@@ -94,7 +94,8 @@ type Config struct {
 	Maintenance  []Maintenance       `yaml:"maintenance"`
 	Auth         Auth                `yaml:"auth"`
 	CORS         []string            `yaml:"cors"`
-	Secrets      map[string]string   `yaml:"-"` // resolved from the environment
+	Secrets      map[string]string   `yaml:"-"` // resolved from the environment (or NAME_FILE)
+	secretErrs   []error
 }
 
 // Listen addresses.
@@ -407,8 +408,18 @@ func (m Maintenance) Active(t time.Time) bool {
 
 // Report is the daily summary.
 type Report struct {
-	At    string `yaml:"at"`    // "06:00" UTC
+	At    string `yaml:"at"`    // "HH:MM"
+	TZ    string `yaml:"tz"`    // IANA zone of at (default UTC)
 	Route string `yaml:"route"` // route name
+	loc   *time.Location
+}
+
+// Location is the time zone of the report.
+func (r Report) Location() *time.Location {
+	if r.loc == nil {
+		return time.UTC
+	}
+	return r.loc
 }
 
 // Auth for the API.
@@ -602,9 +613,18 @@ func (c *Config) defaults() {
 func (c *Config) resolveSecrets() {
 	c.Secrets = map[string]string{}
 	add := func(name string) {
-		if name != "" {
-			c.Secrets[name] = os.Getenv(name)
+		if name == "" {
+			return
 		}
+		v := os.Getenv(name)
+		if f := os.Getenv(name + "_FILE"); v == "" && f != "" { // Docker/Kubernetes secrets
+			b, err := os.ReadFile(f)
+			if err != nil {
+				c.secretErrs = append(c.secretErrs, fmt.Errorf("%s_FILE: %w", name, err))
+			}
+			v = strings.TrimSpace(string(b))
+		}
+		c.Secrets[name] = v
 	}
 	for _, e := range c.Envs {
 		add(e.IngestTokenEnv)
@@ -648,7 +668,7 @@ func (c *Config) LightsailEnabled() bool {
 func (c *Config) AIEnabled() bool { return c.AI != nil && c.Secret(c.AI.KeyEnv) != "" }
 
 func (c *Config) validate() error {
-	var errs []error
+	errs := append([]error(nil), c.secretErrs...)
 	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
 	if len(c.Envs) == 0 {
 		bad("envs: at least one environment is required")
@@ -800,6 +820,13 @@ func (c *Config) validate() error {
 		bad("report: route %q is not configured", c.Report.Route)
 	}
 	if c.Report != nil {
+		if c.Report.TZ != "" {
+			loc, err := time.LoadLocation(c.Report.TZ)
+			if err != nil {
+				bad("report.tz: %v", err)
+			}
+			c.Report.loc = loc
+		}
 		if _, err := time.Parse("15:04", c.Report.At); err != nil {
 			bad("report.at: want HH:MM (UTC)")
 		}

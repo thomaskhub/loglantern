@@ -367,10 +367,10 @@ func (a *App) Tick(ctx context.Context) {
 		a.log.Error("save hosts", "err", err)
 	}
 	if r := a.cfg.Report; r != nil {
-		if due, err := report.Due(ctx, a.st, r.At, now); err != nil {
+		if due, err := report.Due(ctx, a.st, r.At, r.Location(), now); err != nil {
 			a.log.Error("report", "err", err)
 		} else if due {
-			text, err := report.Send(ctx, a.st, a.out, a.envs, r.Route, now)
+			text, err := report.Send(ctx, a.st, a.out, a.envs, r.Route, r.Location(), now)
 			if err != nil {
 				a.log.Error("report", "err", err)
 			} else if a.agents != nil && a.agents.Has(config.OnDailyReport) {

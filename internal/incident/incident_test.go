@@ -183,8 +183,8 @@ func TestSilenceAndReminder(t *testing.T) {
 	}
 	defer st.Close()
 	cfg := &config.Config{
-		Rules:  []config.Rule{{Name: "cpu", Severity: "warning"}, {Name: "disk", Severity: "critical"}},
-		Routes: []config.Route{{Name: "all", Send: []string{"tg"}, Repeat: config.Duration(4 * time.Hour)}, {Name: "quiet", Send: []string{"mail"}}},
+		Rules:       []config.Rule{{Name: "cpu", Severity: "warning"}, {Name: "disk", Severity: "critical"}},
+		Routes:      []config.Route{{Name: "all", Send: []string{"tg"}, Repeat: config.Duration(4 * time.Hour)}, {Name: "quiet", Send: []string{"mail"}}},
 		Maintenance: []config.Maintenance{{Name: "nightly", Match: config.Match{Host: "db1"}, From: "23:00", To: "01:00"}},
 	}
 	m := New(st, cfg, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))

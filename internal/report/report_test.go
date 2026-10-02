@@ -65,21 +65,38 @@ func TestReport(t *testing.T) {
 		at   time.Time
 		want bool
 	}{{now.Add(-time.Minute), false}, {now, true}, {now.Add(5 * time.Hour), true}} {
-		if got, _ := Due(ctx, st, "06:00", c.at); got != c.want {
+		if got, _ := Due(ctx, st, "06:00", time.UTC, c.at); got != c.want {
 			t.Errorf("Y2 due at %s: %v", c.at, got)
 		}
 	}
-	if text, err := Send(ctx, st, notify.NewOutbox(st, &config.Config{Routes: []config.Route{{Name: "daily", Send: []string{"tg/daily"}}}}), []string{"uat"}, "daily", now); err != nil || !strings.HasPrefix(text, "Daily report") {
+	if text, err := Send(ctx, st, notify.NewOutbox(st, &config.Config{Routes: []config.Route{{Name: "daily", Send: []string{"tg/daily"}}}}), []string{"uat"}, "daily", time.UTC, now); err != nil || !strings.HasPrefix(text, "Daily report") {
 		t.Fatal(err)
 	}
-	if got, _ := Due(ctx, st, "06:00", now.Add(time.Hour)); got {
+	if got, _ := Due(ctx, st, "06:00", time.UTC, now.Add(time.Hour)); got {
 		t.Error("Y3 sent twice the same day (restart)")
 	}
-	if got, _ := Due(ctx, st, "06:00", now.Add(24*time.Hour)); !got {
+	if got, _ := Due(ctx, st, "06:00", time.UTC, now.Add(24*time.Hour)); !got {
 		t.Error("Y3 next day not due")
 	}
 	msgs, _ := st.Due(ctx, now, 10)
 	if len(msgs) != 1 || msgs[0].Route != "daily" || msgs[0].Dest != "tg/daily" {
 		t.Errorf("Y4 queued: %+v", msgs)
+	}
+}
+
+func TestDueTimeZone(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ll.db"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	kolkata, _ := time.LoadLocation("Asia/Kolkata")
+	ctx := context.Background()
+	// 06:00 in Kolkata is 00:30 UTC
+	if due, _ := Due(ctx, st, "06:00", kolkata, time.Date(2026, 10, 2, 0, 29, 0, 0, time.UTC)); due {
+		t.Error("Y5 due before 06:00 Kolkata")
+	}
+	if due, _ := Due(ctx, st, "06:00", kolkata, time.Date(2026, 10, 2, 0, 30, 0, 0, time.UTC)); !due {
+		t.Error("Y5 not due at 06:00 Kolkata")
 	}
 }

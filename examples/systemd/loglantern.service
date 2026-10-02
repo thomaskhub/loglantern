@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/loglantern -config /etc/loglantern/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
 EnvironmentFile=/etc/loglantern/secrets.env
 User=loglantern
 Group=loglantern

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -225,5 +227,20 @@ maintenance:
 		if _, err := Parse([]byte("envs: {uat: {ingest_token_env: LL_T}}\n" + y)); err == nil {
 			t.Errorf("W3 %s accepted", name)
 		}
+	}
+}
+
+func TestSecretFile(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "token")
+	_ = os.WriteFile(f, []byte("from-file\n"), 0o600)
+	t.Setenv("LL_FT", "")
+	t.Setenv("LL_FT_FILE", f)
+	c, err := Parse([]byte("envs: {uat: {ingest_token_env: LL_FT}}\nreport: {at: '06:00', tz: Asia/Kolkata, route: r}\nroutes: [{name: r, send: [w]}]\nnotifiers: {w: {webhook: {url_env: LL_FT}}}\n"))
+	if err != nil || c.Secret("LL_FT") != "from-file" || c.Report.Location().String() != "Asia/Kolkata" {
+		t.Fatalf("S1 secret file / report tz: %v %q", err, c.Secret("LL_FT"))
+	}
+	t.Setenv("LL_FT_FILE", "/nonexistent")
+	if _, err := Parse([]byte("envs: {uat: {ingest_token_env: LL_FT}}\n")); err == nil || !strings.Contains(err.Error(), "LL_FT_FILE") {
+		t.Fatalf("S2 unreadable secret file: %v", err)
 	}
 }
