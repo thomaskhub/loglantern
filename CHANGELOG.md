@@ -17,4 +17,5 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - Daily report with time zone.
 - JSON API with OpenAPI, SSE, CORS, API keys and JWT (RS256, ES256, EdDSA); roles viewer, logs, admin.
 - Config reload on SIGHUP; secrets from environment variables or `NAME_FILE`.
+- `install.sh`: install, update (config checked first), checks-only, uninstall/purge; verifies release checksums.
 - Example checks (system, PostgreSQL), Fluent Bit config, systemd units; container image and release binaries.

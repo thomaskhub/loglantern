@@ -1,10 +1,17 @@
 #!/bin/sh
-# loglantern check: PostgreSQL role, replication lag and pgBackRest backups as facts. Run as postgres.
+# loglantern check: PostgreSQL role, replication lag and pgBackRest backups as facts.
+# Does nothing on hosts without PostgreSQL; started as root it runs itself as the postgres user.
 #   series: postgres.up postgres.primary postgres.connections_pct
 #           replication.lag_s replication.streaming (standby)
 #           backup.status (text: ok | error | none) backup.age_h (primary, when pgbackrest is installed)
 # Env: PGHOST/PGPORT as usual; PGBACKREST_STANZA (default main).
 set -u
+
+if [ "$(id -u)" = 0 ]; then
+	id postgres >/dev/null 2>&1 || exit 0
+	exec runuser -u postgres -- "$0" "$@"
+fi
+command -v psql >/dev/null 2>&1 || exit 0
 
 emit() {
 	if [ "${LOGLANTERN_STDOUT:-}" = 1 ]; then

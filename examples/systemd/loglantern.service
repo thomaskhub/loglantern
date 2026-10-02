@@ -10,6 +10,7 @@ EnvironmentFile=/etc/loglantern/secrets.env
 User=loglantern
 Group=loglantern
 StateDirectory=loglantern
+StateDirectoryMode=0750
 Restart=always
 RestartSec=5
 # small VMs: keep memory bounded

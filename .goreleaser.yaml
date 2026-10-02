@@ -17,10 +17,15 @@ archives:
       - README.md
       - CHANGELOG.md
       - examples/*
+      - install.sh
       - examples/**/*
 
 checksum:
   name_template: checksums.txt
+
+release:
+  extra_files:
+    - glob: ./install.sh
 
 dockers:
   - image_templates: ["ghcr.io/thomkin/loglantern:{{ .Version }}-amd64"]

@@ -30,20 +30,40 @@ long retention, use Prometheus/Loki/VictoriaMetrics.
 
 ## Install
 
-- **Binary:** download from [Releases](https://github.com/thomkin/loglantern/releases) (Linux and macOS, amd64 and arm64).
-- **Container:** `ghcr.io/thomkin/loglantern:latest` (distroless, runs as non-root; mount the config at
-  `/etc/loglantern/config.yaml` and a writable volume at `/var/lib/loglantern`; listen on `0.0.0.0` in the config).
-- **From source:** `go install github.com/thomkin/loglantern/cmd/loglantern@latest` (Go 1.26+), or `docker build .`.
+**Recommended: the install script** (Linux with systemd, amd64 or arm64):
 
 ```sh
-sudo useradd --system loglantern
-sudo install -d -o loglantern /etc/loglantern /var/lib/loglantern
-sudo cp examples/config.yaml /etc/loglantern/config.yaml               # edit
-echo 'LOGLANTERN_TOKEN_PROD=...' | sudo tee /etc/loglantern/secrets.env
-loglantern -config /etc/loglantern/config.yaml check-config
-sudo cp examples/systemd/loglantern.service /etc/systemd/system/
-sudo systemctl enable --now loglantern
+curl -fsSL https://raw.githubusercontent.com/thomkin/loglantern/main/install.sh | sudo sh
 ```
+
+The script:
+- downloads the latest release and verifies its checksum;
+- creates the user `loglantern`, plus `/etc/loglantern` and `/var/lib/loglantern`;
+- installs `/usr/local/bin/loglantern` and the systemd unit;
+- writes a starter config, plus a `secrets.env` with a generated ingest token (printed at the end);
+- starts the service.
+
+It also copies the full example to `/etc/loglantern/config.example.yaml`.
+
+Run it again to update. It keeps your config and secrets, checks the config with the new binary first,
+and restarts only if the check passes.
+
+| option | |
+|---|---|
+| `--version v0.2.0` | a specific release instead of the latest |
+| `--archive FILE` | install from a downloaded release archive (offline, Ansible) |
+| `--env NAME` | environment of the starter config (default `prod`) |
+| `--checks` / `--checks-only` | also / only install the check scripts and their timer (for monitored hosts) |
+| `--uninstall` / `--purge` | remove the program, keeping / deleting config, data and user |
+
+Pass options with `| sudo sh -s -- --checks-only`. The script is also attached to every release.
+
+Other ways:
+- **Binary:** download from [Releases](https://github.com/thomkin/loglantern/releases), then use `examples/systemd/loglantern.service`.
+- **Container:** `ghcr.io/thomkin/loglantern:latest` (distroless, runs as non-root; mount the config at
+  `/etc/loglantern/config.yaml` and a writable volume at `/var/lib/loglantern`; listen on `0.0.0.0`).
+  Docker adds a daemon, so on small VMs the binary is lighter.
+- **From source:** `go install github.com/thomkin/loglantern/cmd/loglantern@latest` (Go 1.26+), or `docker build .`.
 
 Commands: `loglantern [-config file] [-log-level info] run | check-config | version`.
 `systemctl reload loglantern` (SIGHUP) applies a changed config without dropping data; a broken config
@@ -53,10 +73,10 @@ is rejected and the running one stays. Changing `listen` or `storage.path` needs
 
 1. Install Fluent Bit and use [examples/fluent-bit/fluent-bit.conf](examples/fluent-bit/fluent-bit.conf).
    Set `LOGLANTERN_TOKEN`, `LOGLANTERN_HOST`, `HOST_ROLE` and `LOGLANTERN_ADDR` in its environment.
-2. Optional checks: copy [examples/checks](examples/checks) to `/usr/local/lib/loglantern-checks/` and
-   enable `loglantern-checks.timer` (every 2 minutes). Included:
+2. Optional checks: `curl -fsSL https://raw.githubusercontent.com/thomkin/loglantern/main/install.sh | sudo sh -s -- --checks-only`
+   installs [examples/checks](examples/checks) to `/usr/local/lib/loglantern-checks/` with a timer that runs them every 2 minutes. Included:
    - `system.sh`: `mem.used_pct`, `mem.swap_pct`, `disk.used_pct`, `disk.inodes_pct` (extra mounts as `disk_<mount>.*`), `load.per_cpu`, `systemd.failed`
-   - `postgres.sh` (run as postgres): `postgres.up`, `postgres.primary`, `postgres.connections_pct`, `replication.lag_s`, `replication.streaming`, `backup.status`, `backup.age_h` (pgBackRest)
+   - `postgres.sh` (runs as the postgres user; does nothing on hosts without PostgreSQL): `postgres.up`, `postgres.primary`, `postgres.connections_pct`, `replication.lag_s`, `replication.streaming`, `backup.status`, `backup.age_h` (pgBackRest)
 
 For Docker hosts, add Fluent Bit's `docker` or `forward` input; any record with `host` works.
 
@@ -206,6 +226,7 @@ See [examples/config.yaml](examples/config.yaml) for every option.
 ```sh
 go test -race ./...                                   # unit + integration (the Fluent Bit e2e needs podman)
 LOGLANTERN_LOAD=60s go test -run TestLoad -v ./test/  # 1,000 records/s against the real binary
+LOGLANTERN_INSTALL_TEST=1 go test -run TestInstallScript -v ./test/  # install.sh in a systemd container (podman)
 ```
 
 A new notifier type is a new section in `config.Notifier` plus a `Send(ctx, target, text)`

@@ -1,0 +1,3 @@
+FROM docker.io/library/fedora:latest
+RUN dnf -y install systemd procps-ng util-linux shadow-utils tar gzip curl findutils && dnf clean all
+CMD ["/sbin/init"]
