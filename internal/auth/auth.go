@@ -26,13 +26,17 @@ import (
 
 // Principal is an authenticated caller.
 type Principal struct {
-	Name string   `json:"name"`
-	Role string   `json:"role"` // viewer | logs
-	Envs []string `json:"envs"` // environments the caller may see
+	Name    string   `json:"name"`
+	Role    string   `json:"role"`     // viewer | logs
+	Envs    []string `json:"envs"`     // environments the caller may see
+	AllEnvs bool     `json:"all_envs"` // every configured environment (may manage env-less silences)
 }
 
 // CanSeeLogs reports whether log lines are allowed.
-func (p Principal) CanSeeLogs() bool { return p.Role == config.RoleLogs }
+func (p Principal) CanSeeLogs() bool { return p.Role == config.RoleLogs || p.Role == config.RoleAdmin }
+
+// CanSilence reports whether the caller may manage silences.
+func (p Principal) CanSilence() bool { return p.Role == config.RoleAdmin }
 
 // Allowed narrows requested envs to permitted ones (all permitted when none requested).
 func (p Principal) Allowed(requested []string) []string {
@@ -63,6 +67,7 @@ type jwtKey struct {
 	name  string
 	pub   crypto.PublicKey
 	envs  []string
+	all   bool
 	roles map[string][]config.ClaimMatch
 }
 
@@ -80,11 +85,16 @@ func New(cfg *config.Config) (*Auth, error) {
 		all = append(all, e)
 	}
 	slices.Sort(all)
-	envs := func(list []string) []string {
+	envs := func(list []string) ([]string, bool) {
 		if len(list) == 0 {
-			return all
+			return all, true
 		}
-		return list
+		for _, e := range all {
+			if !slices.Contains(list, e) {
+				return list, false
+			}
+		}
+		return list, true
 	}
 	a := &Auth{Now: time.Now}
 	for _, k := range cfg.Auth.APIKeys {
@@ -92,7 +102,8 @@ func New(cfg *config.Config) (*Auth, error) {
 		if len(v) < 16 {
 			return nil, fmt.Errorf("auth: api key %s shorter than 16 characters", k.Name)
 		}
-		a.keys = append(a.keys, apiKey{[]byte(v), Principal{Name: k.Name, Role: k.Role, Envs: envs(k.Envs)}})
+		es, every := envs(k.Envs)
+		a.keys = append(a.keys, apiKey{[]byte(v), Principal{Name: k.Name, Role: k.Role, Envs: es, AllEnvs: every}})
 	}
 	for _, j := range cfg.Auth.JWT {
 		b, err := os.ReadFile(j.PublicKeyFile)
@@ -103,7 +114,8 @@ func New(cfg *config.Config) (*Auth, error) {
 		if err != nil {
 			return nil, fmt.Errorf("auth: %s: %w", j.Name, err)
 		}
-		a.jwts = append(a.jwts, jwtKey{name: j.Name, pub: pub, envs: envs(j.Envs), roles: j.Roles})
+		es, every := envs(j.Envs)
+		a.jwts = append(a.jwts, jwtKey{name: j.Name, pub: pub, envs: es, all: every, roles: j.Roles})
 	}
 	return a, nil
 }
@@ -218,7 +230,7 @@ func (a *Auth) checkJWT(tok string) (Principal, error) {
 		return Principal{}, ErrForbidden
 	}
 	role := ""
-	for _, r := range []string{config.RoleLogs, config.RoleViewer} { // highest first
+	for _, r := range config.Roles { // highest first
 		if slices.ContainsFunc(key.roles[r], func(m config.ClaimMatch) bool { return matches(claims, m) }) {
 			role = r
 			break
@@ -228,7 +240,7 @@ func (a *Auth) checkJWT(tok string) (Principal, error) {
 		return Principal{}, ErrForbidden
 	}
 	name, _ := claims["sub"].(string)
-	return Principal{Name: key.name + ":" + name, Role: role, Envs: key.envs}, nil
+	return Principal{Name: key.name + ":" + name, Role: role, Envs: key.envs, AllEnvs: key.all}, nil
 }
 
 // verify checks a signature; the algorithm must fit the key type (no algorithm confusion, no "none").

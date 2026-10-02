@@ -175,3 +175,78 @@ func TestShort(t *testing.T) {
 		}
 	}
 }
+
+func TestSilenceAndReminder(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ll.db"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := &config.Config{
+		Rules:  []config.Rule{{Name: "cpu", Severity: "warning"}, {Name: "disk", Severity: "critical"}},
+		Routes: []config.Route{{Name: "all", Send: []string{"tg"}, Repeat: config.Duration(4 * time.Hour)}, {Name: "quiet", Send: []string{"mail"}}},
+		Maintenance: []config.Maintenance{{Name: "nightly", Match: config.Match{Host: "db1"}, From: "23:00", To: "01:00"}},
+	}
+	m := New(st, cfg, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx := context.Background()
+	open := func(rule, host string) rules.Transition {
+		return rules.Transition{Key: rule + "/uat/" + host, Rule: rule, Env: "uat", Host: host, Severity: "warning", Open: true, Text: rule + " high"}
+	}
+	resolve := func(rule, host string) rules.Transition {
+		return rules.Transition{Key: rule + "/uat/" + host, Rule: rule, Env: "uat", Host: host}
+	}
+
+	// I10 silenced incident: recorded, not sent; announced late once the silence ends
+	_, _ = st.AddSilence(ctx, store.Silence{Host: "h1", Starts: t0.Add(-time.Minute), Ends: t0.Add(time.Hour), Comment: "deploy", Created: t0})
+	_ = m.Handle(ctx, []rules.Transition{open("cpu", "h1")}, t0)
+	if got := due(t, st); len(got) != 0 {
+		t.Fatalf("I10 silenced but sent: %q", got)
+	}
+	_ = m.Sweep(ctx, t0.Add(30*time.Minute))
+	if got := due(t, st); len(got) != 0 {
+		t.Fatalf("I10 sent during silence: %q", got)
+	}
+	_ = m.Sweep(ctx, t0.Add(61*time.Minute))
+	got := due(t, st)
+	if len(got) != 2 || !strings.Contains(got[0], "(open since 1h01m)") {
+		t.Fatalf("I10 late announcement: %q", got)
+	}
+	_ = m.Sweep(ctx, t0.Add(62*time.Minute))
+	if got := due(t, st); len(got) != 0 {
+		t.Fatalf("I10 announced twice: %q", got)
+	}
+
+	// I11 reminder on repeat routes only, then again after another period
+	_ = m.Sweep(ctx, t0.Add(5*time.Hour+2*time.Minute))
+	got = due(t, st)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "all|[STILL OPEN 5h02m] uat/h1 #1") {
+		t.Fatalf("I11 reminder: %q", got)
+	}
+	_ = m.Sweep(ctx, t0.Add(6*time.Hour))
+	if got := due(t, st); len(got) != 0 {
+		t.Fatalf("I11 reminder too early: %q", got)
+	}
+
+	// I12 resolved during a silence it never announced: nothing sent
+	_, _ = st.AddSilence(ctx, store.Silence{Rule: "disk", Starts: t0, Ends: t0.Add(24 * time.Hour), Created: t0})
+	_ = m.Handle(ctx, []rules.Transition{open("disk", "h2")}, t0.Add(7*time.Hour))
+	_ = m.Handle(ctx, []rules.Transition{resolve("disk", "h2")}, t0.Add(8*time.Hour))
+	if got := due(t, st); len(got) != 0 {
+		t.Fatalf("I12 silent resolve: %q", got)
+	}
+
+	// I13 weekly maintenance window past midnight (UTC); h1 incident resolves to the routes that heard of it
+	night := time.Date(2026, 10, 3, 0, 30, 0, 0, time.UTC)
+	_ = m.Handle(ctx, []rules.Transition{open("cpu", "db1")}, night)
+	if got := due(t, st); len(got) != 0 {
+		t.Fatalf("I13 maintenance: %q", got)
+	}
+	_ = m.Sweep(ctx, night.Add(31*time.Minute))
+	if got := strings.Join(due(t, st), "\n"); strings.Count(got, "uat/db1 #3: cpu high (open since 31m)") != 2 || !strings.Contains(got, "STILL OPEN 13h01m] uat/h1") {
+		t.Fatalf("I13 after window (+ due reminder of h1): %q", got)
+	}
+	_ = m.Handle(ctx, []rules.Transition{resolve("cpu", "h1")}, night)
+	if got := due(t, st); len(got) != 2 || !strings.Contains(got[0], "RESOLVED") {
+		t.Fatalf("I14 resolved to announced routes: %q", got)
+	}
+}

@@ -355,6 +355,9 @@ func (a *App) Tick(ctx context.Context) {
 		default:
 		}
 	}
+	if err := a.mgr.Sweep(ctx, now); err != nil {
+		a.log.Error("incident sweep", "err", err)
+	}
 	if len(changes) > 0 {
 		for _, c := range changes {
 			a.hub.Publish("host", c.Env, c)

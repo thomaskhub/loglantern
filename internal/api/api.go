@@ -68,6 +68,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/counters", s.authed(false, false, s.counters))
 	mux.Handle("GET /api/v1/logs", s.authed(true, false, s.logs))
 	mux.Handle("GET /api/v1/events", s.authed(false, true, s.events))
+	mux.Handle("GET /api/v1/silences", s.authed(false, false, s.silences))
+	mux.Handle("POST /api/v1/silences", s.authed(false, false, s.addSilence))
+	mux.Handle("DELETE /api/v1/silences/{id}", s.authed(false, false, s.endSilence))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { fail(w, http.StatusNotFound, "not found") })
 	return s.withCORS(mux)
 }
@@ -79,7 +82,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			h.Set("Access-Control-Allow-Origin", o)
 			h.Add("Vary", "Origin")
 			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Last-Event-ID")
-			h.Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			h.Set("Access-Control-Max-Age", "600")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
@@ -373,4 +376,127 @@ func nonNil[T any](v []T) []T {
 		return []T{}
 	}
 	return v
+}
+
+// silences lists silences that have not ended, limited to the caller's environments
+// (a silence without env is shown to callers who may see every environment).
+func (s *Server) silences(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	all, err := s.st.Silences(r.Context(), s.Now())
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	out := []store.Silence{}
+	for _, x := range all {
+		if visible(p, x.Env) {
+			out = append(out, x)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"silences": out})
+}
+
+func visible(p auth.Principal, env string) bool {
+	if env == "" {
+		return p.AllEnvs
+	}
+	return slices.Contains(p.Envs, env)
+}
+
+type silenceRequest struct {
+	Env      string    `json:"env"`
+	Host     string    `json:"host"`
+	Role     string    `json:"role"`
+	Service  string    `json:"service"`
+	Rule     string    `json:"rule"`
+	Severity []string  `json:"severity"`
+	Starts   time.Time `json:"starts"`
+	Ends     time.Time `json:"ends"`
+	Duration string    `json:"duration"` // instead of ends, e.g. "2h"
+	Comment  string    `json:"comment"`
+}
+
+func (s *Server) addSilence(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.CanSilence() {
+		fail(w, http.StatusForbidden, "role "+p.Role+" may not manage silences")
+		return
+	}
+	var req silenceRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		fail(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	now := s.Now()
+	if req.Starts.IsZero() {
+		req.Starts = now
+	}
+	if req.Duration != "" {
+		d, err := time.ParseDuration(req.Duration)
+		if err != nil || d <= 0 || !req.Ends.IsZero() {
+			fail(w, http.StatusBadRequest, "duration must be positive, e.g. 2h, and not combined with ends")
+			return
+		}
+		req.Ends = req.Starts.Add(d)
+	}
+	switch {
+	case !req.Ends.After(req.Starts) || !req.Ends.After(now):
+		fail(w, http.StatusBadRequest, "ends (or duration) must be in the future and after starts")
+		return
+	case req.Ends.Sub(req.Starts) > 30*24*time.Hour:
+		fail(w, http.StatusBadRequest, "a silence lasts at most 30 days")
+		return
+	case strings.TrimSpace(req.Comment) == "":
+		fail(w, http.StatusBadRequest, "comment is required")
+		return
+	case !visible(p, req.Env):
+		fail(w, http.StatusForbidden, "environment not permitted (set env)")
+		return
+	}
+	for _, sv := range req.Severity {
+		if !slices.Contains([]string{"info", "warning", "critical"}, sv) {
+			fail(w, http.StatusBadRequest, "unknown severity "+sv)
+			return
+		}
+	}
+	x := store.Silence{Env: req.Env, Host: req.Host, Role: req.Role, Service: req.Service, Rule: req.Rule, Severity: req.Severity,
+		Starts: req.Starts.UTC(), Ends: req.Ends.UTC(), Comment: req.Comment, CreatedBy: p.Name, Created: now.UTC()}
+	id, err := s.st.AddSilence(r.Context(), x)
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	x.ID = id
+	s.log.Info("silence added", "id", id, "by", p.Name, "env", x.Env, "host", x.Host, "rule", x.Rule, "ends", x.Ends)
+	writeJSON(w, http.StatusCreated, x)
+}
+
+func (s *Server) endSilence(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.CanSilence() {
+		fail(w, http.StatusForbidden, "role "+p.Role+" may not manage silences")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	x, ok, err := s.st.GetSilence(r.Context(), id)
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	if !ok || !visible(p, x.Env) {
+		fail(w, http.StatusNotFound, "no such silence")
+		return
+	}
+	if _, err := s.st.EndSilence(r.Context(), id, s.Now()); err != nil {
+		s.internal(w, err)
+		return
+	}
+	s.log.Info("silence ended", "id", id, "by", p.Name)
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -20,8 +21,10 @@ import (
 )
 
 const (
-	viewerKey = "viewer-key-0123456789"
-	logsKey   = "logs-key-0123456789ab"
+	viewerKey    = "viewer-key-0123456789"
+	logsKey      = "logs-key-0123456789ab"
+	adminKey     = "admin-key-0123456789a"
+	prodAdminKey = "prod-admin-key-012345"
 )
 
 var now = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
@@ -54,8 +57,10 @@ func setup(t *testing.T) (*httptest.Server, *Hub) {
 		Auth: config.Auth{APIKeys: []config.APIKey{
 			{Name: "board", KeyEnv: "V", Role: config.RoleViewer, Envs: []string{"prod"}},
 			{Name: "dev", KeyEnv: "L", Role: config.RoleLogs},
+			{Name: "ops", KeyEnv: "A", Role: config.RoleAdmin},
+			{Name: "prod-ops", KeyEnv: "AP", Role: config.RoleAdmin, Envs: []string{"prod"}},
 		}},
-		Secrets: map[string]string{"V": viewerKey, "L": logsKey},
+		Secrets: map[string]string{"V": viewerKey, "L": logsKey, "A": adminKey, "AP": prodAdminKey},
 	}
 	a, err := auth.New(cfg)
 	if err != nil {
@@ -242,4 +247,78 @@ func TestHubSlowSubscriber(t *testing.T) {
 		t.Fatalf("slow subscriber: got %d, subs %d", n, h.Count())
 	}
 	cancel() // second close must not panic
+}
+
+func call(t *testing.T, method, url, key, body string, out any) int {
+	t.Helper()
+	req, _ := http.NewRequest(method, url, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if out != nil {
+		_ = json.NewDecoder(resp.Body).Decode(out)
+	}
+	return resp.StatusCode
+}
+
+func TestSilences(t *testing.T) {
+	srv, _ := setup(t)
+	u := srv.URL + "/api/v1/silences"
+	body := `{"env":"prod","host":"h1","duration":"2h","comment":"deploy"}`
+	if c := call(t, "POST", u, logsKey, body, nil); c != 403 {
+		t.Fatalf("Q1 logs role creates silence: %d", c)
+	}
+	var x store.Silence
+	if c := call(t, "POST", u, prodAdminKey, body, &x); c != 201 || x.ID == 0 || x.CreatedBy != "prod-ops" || !x.Ends.Equal(now.Add(2*time.Hour)) {
+		t.Fatalf("Q2 create: %d %+v", c, x)
+	}
+	for name, b := range map[string]string{
+		"other env": `{"env":"uat","duration":"1h","comment":"x"}`,
+		"no env":    `{"duration":"1h","comment":"x"}`,
+	} {
+		if c := call(t, "POST", u, prodAdminKey, b, nil); c != 403 {
+			t.Errorf("Q3 %s: %d", name, c)
+		}
+	}
+	for name, b := range map[string]string{
+		"no comment":   `{"env":"prod","duration":"1h"}`,
+		"past":         `{"env":"prod","ends":"2020-01-01T00:00:00Z","comment":"x"}`,
+		"too long":     `{"env":"prod","duration":"800h","comment":"x"}`,
+		"both":         `{"env":"prod","duration":"1h","ends":"2030-01-01T00:00:00Z","comment":"x"}`,
+		"bad severity": `{"env":"prod","duration":"1h","comment":"x","severity":["loud"]}`,
+		"unknown":      `{"env":"prod","duration":"1h","comment":"x","forever":true}`,
+	} {
+		if c := call(t, "POST", u, adminKey, b, nil); c != 400 {
+			t.Errorf("Q4 %s: %d", name, c)
+		}
+	}
+	if c := call(t, "POST", u, adminKey, `{"duration":"1h","comment":"all envs"}`, nil); c != 201 {
+		t.Fatalf("Q5 env-less silence by all-env admin: %d", c)
+	}
+	var list struct{ Silences []store.Silence }
+	call(t, "GET", u, viewerKey, "", &list)
+	if len(list.Silences) != 1 || list.Silences[0].Env != "prod" {
+		t.Fatalf("Q6 prod viewer sees only prod silences: %+v", list)
+	}
+	call(t, "GET", u, adminKey, "", &list)
+	if len(list.Silences) != 2 {
+		t.Fatalf("Q6 admin sees all: %+v", list)
+	}
+	other := list.Silences[0].ID // newest: the env-less one
+	if c := call(t, "DELETE", fmt.Sprintf("%s/%d", u, other), prodAdminKey, "", nil); c != 404 {
+		t.Fatalf("Q7 prod admin ends env-less silence: %d", c)
+	}
+	if c := call(t, "DELETE", fmt.Sprintf("%s/%d", u, x.ID), viewerKey, "", nil); c != 403 {
+		t.Fatalf("Q7 viewer ends silence: %d", c)
+	}
+	if c := call(t, "DELETE", fmt.Sprintf("%s/%d", u, x.ID), prodAdminKey, "", nil); c != 204 {
+		t.Fatalf("Q8 end: %d", c)
+	}
+	call(t, "GET", u, adminKey, "", &list)
+	if len(list.Silences) != 1 {
+		t.Fatalf("Q8 ended silence still listed: %+v", list)
+	}
 }

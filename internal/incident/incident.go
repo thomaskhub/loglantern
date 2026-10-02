@@ -29,14 +29,16 @@ type Enricher func(ctx context.Context, in store.Incident, role, service string)
 
 // Manager opens and resolves incidents and queues their messages.
 type Manager struct {
-	st      *store.Store
-	out     *notify.Outbox
-	routes  []config.Route
-	service map[string]string // rule -> service of its matcher
-	roleOf  func(env, host string) string
-	enrich  Enricher
-	log     *slog.Logger
-	bg      chan struct{} // limits concurrent enrichments
+	st          *store.Store
+	out         *notify.Outbox
+	routes      []config.Route
+	byName      map[string]config.Route
+	maintenance []config.Maintenance
+	service     map[string]string // rule -> service of its matcher
+	roleOf      func(env, host string) string
+	enrich      Enricher
+	log         *slog.Logger
+	bg          chan struct{} // limits concurrent enrichments
 }
 
 // New creates a manager. enrich may be nil.
@@ -45,6 +47,11 @@ func New(st *store.Store, cfg *config.Config, roleOf func(env, host string) stri
 	for _, r := range cfg.Rules {
 		m.service[r.Name] = r.Match.Service
 	}
+	m.byName = map[string]config.Route{}
+	for _, r := range cfg.Routes {
+		m.byName[r.Name] = r
+	}
+	m.maintenance = cfg.Maintenance
 	if m.roleOf == nil {
 		m.roleOf = func(string, string) string { return "" }
 	}
@@ -70,8 +77,13 @@ func HostTransitions(changes []hosts.Change) []rules.Transition {
 	return out
 }
 
-// Handle stores transitions and queues one message per matching route.
+// Handle stores transitions. A new incident is announced on every matching route unless it is silenced
+// (Sweep announces it once the silence ends); a resolved incident is announced where it was announced before.
 func (m *Manager) Handle(ctx context.Context, ts []rules.Transition, now time.Time) error {
+	sil, err := m.st.Silences(ctx, now)
+	if err != nil {
+		return fmt.Errorf("silences: %w", err)
+	}
 	for _, t := range ts {
 		if t.Open {
 			in := store.Incident{Key: t.Key, Rule: t.Rule, Env: t.Env, Host: t.Host, Severity: t.Severity, Opened: now, Text: t.Text}
@@ -83,11 +95,12 @@ func (m *Manager) Handle(ctx context.Context, ts []rules.Transition, now time.Ti
 				continue // already open (e.g. after a restart)
 			}
 			in.ID = id
-			if err := m.queue(ctx, t, id, OpenText(in), false, now); err != nil {
-				return err
+			if m.Silenced(t, sil, now) {
+				m.log.Info("incident silenced", "id", id, "key", t.Key)
+				continue
 			}
-			if m.enrich != nil {
-				m.followUp(in, t)
+			if err := m.announce(ctx, in, t, nil, now); err != nil {
+				return err
 			}
 			continue
 		}
@@ -101,11 +114,105 @@ func (m *Manager) Handle(ctx context.Context, ts []rules.Transition, now time.Ti
 		if t.Text != "" && t.Rule == HostRule {
 			in.Text = t.Text
 		}
-		if err := m.queue(ctx, t, in.ID, ResolvedText(in, now), true, now); err != nil {
+		told, err := m.st.Notified(ctx, in.ID)
+		if err != nil {
 			return err
+		}
+		for _, r := range m.Routes(t) {
+			if _, ok := told[r]; !ok {
+				continue // never announced there (silenced, or route added later)
+			}
+			if err := m.out.Put(ctx, r, ResolvedText(in, now), in.ID, true, now); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// announce sends the opening message to the routes that have not had it yet and starts the AI follow-up.
+func (m *Manager) announce(ctx context.Context, in store.Incident, t rules.Transition, told map[string]time.Time, now time.Time) error {
+	sent := false
+	for _, r := range m.Routes(t) {
+		if _, ok := told[r]; ok {
+			continue
+		}
+		text := OpenText(in)
+		if now.Sub(in.Opened) > time.Minute {
+			text = fmt.Sprintf("%s (open since %s)", text, Short(now.Sub(in.Opened)))
+		}
+		if err := m.out.Put(ctx, r, text, in.ID, false, now); err != nil {
+			return err
+		}
+		if err := m.st.MarkNotified(ctx, in.ID, r, now); err != nil {
+			return err
+		}
+		sent = true
+	}
+	if sent && m.enrich != nil && in.AIText == "" && len(told) == 0 {
+		m.followUp(in, t) // first announcement, also when it comes late after a silence
+	}
+	return nil
+}
+
+// Sweep announces open incidents whose silence has ended and sends reminders on routes with repeat.
+func (m *Manager) Sweep(ctx context.Context, now time.Time) error {
+	open, err := m.st.Incidents(ctx, store.IncidentFilter{Status: store.StatusOpen, Limit: 10000})
+	if err != nil {
+		return err
+	}
+	if len(open) == 0 {
+		return nil
+	}
+	sil, err := m.st.Silences(ctx, now)
+	if err != nil {
+		return err
+	}
+	for _, in := range open {
+		t := rules.Transition{Key: in.Key, Rule: in.Rule, Env: in.Env, Host: in.Host, Severity: in.Severity, Open: true, Text: in.Text}
+		if m.Silenced(t, sil, now) {
+			continue
+		}
+		told, err := m.st.Notified(ctx, in.ID)
+		if err != nil {
+			return err
+		}
+		if err := m.announce(ctx, in, t, told, now); err != nil {
+			return err
+		}
+		for _, r := range m.Routes(t) {
+			last, ok := told[r]
+			rep := time.Duration(m.byName[r].Repeat)
+			if !ok || rep <= 0 || now.Sub(last) < rep {
+				continue
+			}
+			text := fmt.Sprintf("[STILL OPEN %s] %s/%s #%d: %s", Short(now.Sub(in.Opened)), in.Env, in.Host, in.ID, in.Text)
+			if err := m.out.Put(ctx, r, text, in.ID, false, now); err != nil {
+				return err
+			}
+			if err := m.st.MarkNotified(ctx, in.ID, r, now); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Silenced reports whether a maintenance window or a stored silence covers the incident.
+func (m *Manager) Silenced(t rules.Transition, sil []store.Silence, now time.Time) bool {
+	role, service := m.roleOf(t.Env, t.Host), m.service[t.Rule]
+	for _, w := range m.maintenance {
+		if (w.Rule == "" || w.Rule == t.Rule) && w.Match.Fits(t.Env, t.Host, role, service, t.Severity) && w.Active(now) {
+			return true
+		}
+	}
+	for _, x := range sil {
+		mt := config.Match{Env: x.Env, Host: x.Host, Role: x.Role, Service: x.Service, Severity: x.Severity}
+		if !now.Before(x.Starts) && now.Before(x.Ends) && (x.Rule == "" || x.Rule == t.Rule) && mt.Fits(t.Env, t.Host, role, service, t.Severity) {
+			return true
+		}
+	}
+	return false
 }
 
 // Routes returns the names of the routes that match a transition.
@@ -121,11 +228,7 @@ func (m *Manager) Routes(t rules.Transition) []string {
 }
 
 func (m *Manager) queue(ctx context.Context, t rules.Transition, id int64, text string, resolved bool, now time.Time) error {
-	routes := m.Routes(t)
-	if len(routes) == 0 {
-		m.log.Debug("no route", "key", t.Key)
-	}
-	for _, r := range routes {
+	for _, r := range m.Routes(t) {
 		if err := m.out.Put(ctx, r, text, id, resolved, now); err != nil {
 			return err
 		}

@@ -91,6 +91,7 @@ type Config struct {
 	Probes       []Probe             `yaml:"probes"`
 	Lightsail    *Lightsail          `yaml:"lightsail"`
 	Report       *Report             `yaml:"report"`
+	Maintenance  []Maintenance       `yaml:"maintenance"`
 	Auth         Auth                `yaml:"auth"`
 	CORS         []string            `yaml:"cors"`
 	Secrets      map[string]string   `yaml:"-"` // resolved from the environment
@@ -179,9 +180,9 @@ type Rule struct {
 	Count   int      `yaml:"count"`
 	Per     Duration `yaml:"per"`
 	// anomaly
-	ZScore     float64 `yaml:"zscore"`
-	MinSamples int     `yaml:"min_samples"`
-	MinDelta   float64 `yaml:"min_delta"`
+	ZScore     float64  `yaml:"zscore"`
+	MinSamples int      `yaml:"min_samples"`
+	MinDelta   float64  `yaml:"min_delta"`
 	MaxAge     Duration `yaml:"max_age"` // absent
 }
 
@@ -191,6 +192,7 @@ type Route struct {
 	Match        Match    `yaml:"match"`
 	Send         []string `yaml:"send"`          // "notifier" or "notifier/target"
 	Digest       Duration `yaml:"digest"`        // > 0: bundle messages, at most one delivery per period
+	Repeat       Duration `yaml:"repeat"`        // > 0: remind about incidents still open after this long
 	SendResolved *bool    `yaml:"send_resolved"` // default true
 }
 
@@ -360,6 +362,49 @@ type LightsailMapping struct {
 	Host string `yaml:"host"`
 }
 
+// Maintenance silences notifications in a weekly window or a one-off period; incidents are still recorded.
+type Maintenance struct {
+	Name   string    `yaml:"name"`
+	Match  Match     `yaml:"match"`
+	Rule   string    `yaml:"rule"`   // only this rule ("" = all)
+	Days   []string  `yaml:"days"`   // weekly: mon … sun (empty = every day)
+	From   string    `yaml:"from"`   // weekly: "HH:MM"
+	To     string    `yaml:"to"`     // weekly: "HH:MM" (may be past midnight)
+	TZ     string    `yaml:"tz"`     // weekly: IANA zone (default UTC)
+	Starts time.Time `yaml:"starts"` // one-off (RFC 3339)
+	Ends   time.Time `yaml:"ends"`
+	loc    *time.Location
+}
+
+var weekdays = map[string]time.Weekday{"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
+
+// Active reports whether the window covers t.
+func (m Maintenance) Active(t time.Time) bool {
+	if !m.Ends.IsZero() {
+		return !t.Before(m.Starts) && t.Before(m.Ends)
+	}
+	loc := m.loc
+	if loc == nil {
+		loc = time.UTC
+	}
+	lt := t.In(loc)
+	from, _ := time.Parse("15:04", m.From)
+	to, _ := time.Parse("15:04", m.To)
+	mins := lt.Hour()*60 + lt.Minute()
+	f, e := from.Hour()*60+from.Minute(), to.Hour()*60+to.Minute()
+	day := lt.Weekday()
+	if f > e && mins < e { // window past midnight: the early part belongs to the previous day
+		day = (day + 6) % 7
+	}
+	if len(m.Days) > 0 && !slices.ContainsFunc(m.Days, func(d string) bool { return weekdays[strings.ToLower(d)] == day }) {
+		return false
+	}
+	if f <= e {
+		return mins >= f && mins < e
+	}
+	return mins >= f || mins < e
+}
+
 // Report is the daily summary.
 type Report struct {
 	At    string `yaml:"at"`    // "06:00" UTC
@@ -372,11 +417,16 @@ type Auth struct {
 	JWT     []JWTKey `yaml:"jwt"`
 }
 
-// Roles: viewer sees status, incidents and charts; logs additionally sees log lines.
+// Roles: viewer sees status, incidents and charts; logs additionally sees log lines;
+// admin additionally manages silences.
 const (
 	RoleViewer = "viewer"
 	RoleLogs   = "logs"
+	RoleAdmin  = "admin"
 )
+
+// Roles from high to low.
+var Roles = []string{RoleAdmin, RoleLogs, RoleViewer}
 
 // APIKey is a static bearer key (e.g. for a server-side dashboard).
 type APIKey struct {
@@ -754,9 +804,44 @@ func (c *Config) validate() error {
 			bad("report.at: want HH:MM (UTC)")
 		}
 	}
+	for i := range c.Maintenance {
+		m := &c.Maintenance[i]
+		label := fmt.Sprintf("maintenance[%d]", i)
+		if m.Name != "" {
+			label = "maintenance." + m.Name
+		}
+		oneOff := !m.Starts.IsZero() || !m.Ends.IsZero()
+		weekly := m.From != "" || m.To != "" || len(m.Days) > 0
+		switch {
+		case oneOff == weekly:
+			bad("%s: set either from/to (weekly) or starts/ends (one-off)", label)
+		case oneOff && !m.Ends.After(m.Starts):
+			bad("%s: ends must be after starts", label)
+		case weekly:
+			_, e1 := time.Parse("15:04", m.From)
+			_, e2 := time.Parse("15:04", m.To)
+			if e1 != nil || e2 != nil || m.From == m.To {
+				bad("%s: from and to must be different HH:MM", label)
+			}
+			for _, d := range m.Days {
+				if _, ok := weekdays[strings.ToLower(d)]; !ok {
+					bad("%s: unknown day %q", label, d)
+				}
+			}
+			tz := m.TZ
+			if tz == "" {
+				tz = "UTC"
+			}
+			loc, err := time.LoadLocation(tz)
+			if err != nil {
+				bad("%s: tz: %v", label, err)
+			}
+			m.loc = loc
+		}
+	}
 	for i, k := range c.Auth.APIKeys {
-		if k.Role != RoleViewer && k.Role != RoleLogs {
-			bad("auth.api_keys[%d]: role must be viewer or logs", i)
+		if !slices.Contains(Roles, k.Role) {
+			bad("auth.api_keys[%d]: role must be one of %v", i, Roles)
 		}
 		if c.Secret(k.KeyEnv) == "" {
 			bad("auth.api_keys[%d]: key variable %q is empty", i, k.KeyEnv)
@@ -767,8 +852,8 @@ func (c *Config) validate() error {
 			bad("auth.jwt[%d]: public_key_file and roles are required", i)
 		}
 		for role := range j.Roles {
-			if role != RoleViewer && role != RoleLogs {
-				bad("auth.jwt[%d]: role %q must be viewer or logs", i, role)
+			if !slices.Contains(Roles, role) {
+				bad("auth.jwt[%d]: role %q must be one of %v", i, role, Roles)
 			}
 		}
 	}

@@ -52,6 +52,11 @@ var schema = []string{
 		incident INTEGER, attempts INTEGER NOT NULL DEFAULT 0, next_try INTEGER NOT NULL, sent INTEGER, error TEXT NOT NULL DEFAULT '',
 		dest TEXT NOT NULL DEFAULT '')`,
 	`CREATE INDEX IF NOT EXISTS outbox_pending ON outbox (next_try) WHERE sent IS NULL`,
+	`CREATE TABLE IF NOT EXISTS notified (incident INTEGER NOT NULL, route TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (incident, route))`,
+	`CREATE TABLE IF NOT EXISTS silences (
+		id INTEGER PRIMARY KEY, env TEXT NOT NULL, host TEXT NOT NULL, role TEXT NOT NULL, service TEXT NOT NULL, rule TEXT NOT NULL,
+		severity TEXT NOT NULL, starts INTEGER NOT NULL, ends INTEGER NOT NULL, comment TEXT NOT NULL, created_by TEXT NOT NULL, created INTEGER NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS silences_ends ON silences (ends)`,
 }
 
 // Store is the database.
@@ -207,6 +212,8 @@ func (s *Store) Retain(ctx context.Context, now time.Time, r Retention) (int64, 
 		{`DELETE FROM counters WHERE hour < ?`, now.Add(-r.Counters).Unix()},
 		{`DELETE FROM incidents WHERE status = 'resolved' AND resolved < ?`, ms(now.Add(-r.Incidents))},
 		{`DELETE FROM outbox WHERE sent IS NOT NULL AND sent < ?`, ms(now.Add(-r.Incidents))},
+		{`DELETE FROM notified WHERE incident NOT IN (SELECT id FROM incidents) AND ? = 0`, 0}, // orphans of deleted incidents,
+		{`DELETE FROM silences WHERE ends < ?`, ms(now.Add(-r.Incidents))},
 	} {
 		res, err := s.w.ExecContext(ctx, q.sql, q.limit)
 		if err != nil {

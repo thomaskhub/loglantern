@@ -3,7 +3,7 @@
  "info": {
   "title": "loglantern API",
   "version": "1",
-  "description": "Read-only API for dashboards. Bearer API key or JWT. Role viewer: status, incidents, series, counters. Role logs: also log lines."
+  "description": "Bearer API key or JWT. Role viewer: status, incidents, series, counters, silences (read). Role logs: also log lines. Role admin: also creates and ends silences."
  },
  "security": [
   {
@@ -715,6 +715,146 @@
      }
     }
    }
+  },
+  "/api/v1/silences": {
+   "get": {
+    "summary": "Silences that have not ended",
+    "responses": {
+     "200": {
+      "description": "Silences",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "silences": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Silence"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Mute notifications of matching incidents (role admin)",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SilenceRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Created",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Silence"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/silences/{id}": {
+   "delete": {
+    "summary": "End a silence now (role admin)",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Ended"
+     },
+     "401": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "components": {
@@ -746,7 +886,8 @@
       "type": "string",
       "enum": [
        "viewer",
-       "logs"
+       "logs",
+       "admin"
       ]
      },
      "envs": {
@@ -754,6 +895,9 @@
       "items": {
        "type": "string"
       }
+     },
+     "all_envs": {
+      "type": "boolean"
      }
     }
    },
@@ -913,6 +1057,99 @@
      },
      "fields": {
       "type": "object"
+     }
+    }
+   },
+   "Silence": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "integer"
+     },
+     "env": {
+      "type": "string"
+     },
+     "host": {
+      "type": "string"
+     },
+     "role": {
+      "type": "string"
+     },
+     "service": {
+      "type": "string"
+     },
+     "rule": {
+      "type": "string"
+     },
+     "severity": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "starts": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "ends": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "comment": {
+      "type": "string"
+     },
+     "created_by": {
+      "type": "string"
+     },
+     "created": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "SilenceRequest": {
+    "type": "object",
+    "required": [
+     "comment"
+    ],
+    "additionalProperties": false,
+    "description": "Empty fields match everything. Give ends or duration (max 30 days). env is required unless the caller may see every environment.",
+    "properties": {
+     "env": {
+      "type": "string"
+     },
+     "host": {
+      "type": "string"
+     },
+     "role": {
+      "type": "string"
+     },
+     "service": {
+      "type": "string"
+     },
+     "rule": {
+      "type": "string"
+     },
+     "severity": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "starts": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "ends": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "duration": {
+      "type": "string",
+      "example": "2h"
+     },
+     "comment": {
+      "type": "string"
      }
     }
    }
