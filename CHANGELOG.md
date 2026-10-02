@@ -3,6 +3,12 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Release builds are Linux only (amd64, arm64).
+
 ## [0.1.1] - 2026-10-02
 
 ### Fixed
@@ -26,5 +32,6 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - `install.sh`: install, update (config checked first), checks-only, uninstall/purge; verifies release checksums.
 - Example checks (system, PostgreSQL), Fluent Bit config, systemd units; container image and release binaries.
 
+[0.1.1]: https://github.com/thomaskhub/loglantern/releases/tag/v0.1.1
 [0.1.1]: https://github.com/thomaskhub/loglantern/releases/tag/v0.1.1
 [0.1.0]: https://github.com/thomaskhub/loglantern/releases/tag/v0.1.0

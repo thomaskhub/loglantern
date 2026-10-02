@@ -5,7 +5,7 @@ project_name: loglantern
 builds:
   - main: ./cmd/loglantern
     env: [CGO_ENABLED=0]
-    goos: [linux, darwin]
+    goos: [linux]
     goarch: [amd64, arm64]
     flags: [-trimpath]
     ldflags: ["-s -w -X main.version={{ .Version }}"]
