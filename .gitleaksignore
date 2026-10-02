@@ -1,0 +1,4 @@
+# fake keys in tests
+608bff9f121eafb7fe012f5ee8d4ec26bb062498:test/examples_test.go:generic-api-key:15
+b926e0ac18e0d80e400827bd1834c14b0f2ab3d8:internal/api/api_test.go:generic-api-key:25
+df0536416a9def7437c10ba75e0fd4a3a826bb07:internal/api/api_test.go:generic-api-key:24
