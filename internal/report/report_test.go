@@ -67,7 +67,7 @@ func TestReport(t *testing.T) {
 			t.Errorf("Y2 due at %s: %v", c.at, got)
 		}
 	}
-	if err := Send(ctx, st, []string{"uat"}, "daily", now); err != nil {
+	if text, err := Send(ctx, st, []string{"uat"}, "daily", now); err != nil || !strings.HasPrefix(text, "Daily report") {
 		t.Fatal(err)
 	}
 	if got, _ := Due(ctx, st, "06:00", now.Add(time.Hour)); got {

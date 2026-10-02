@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"syscall"
 
 	"github.com/thomkin/loglantern/internal/app"
@@ -101,8 +102,16 @@ func summary(c *config.Config) {
 	if c.Notifiers.Webhook != nil {
 		notifiers = append(notifiers, "webhook")
 	}
+	ai := on(c.AIEnabled())
+	if c.AI != nil {
+		var names []string
+		for _, a := range c.AI.Agents {
+			names = append(names, a.Name+" ("+a.On+", "+a.Model+")")
+		}
+		ai += ", agents: " + strings.Join(names, ", ")
+	}
 	fmt.Printf("config ok\nenvs: %v\nknown hosts: %d\nrules: %d\nroutes: %d\nnotifiers: %v\nprobes: %d\nai: %s\nlightsail: %s\nreport: %s\napi keys: %d, jwt issuers: %d\n",
-		envs, len(c.Hosts), len(c.Rules), len(c.Routes), notifiers, len(c.Probes), on(c.AIEnabled()), on(c.LightsailEnabled()), on(c.Report != nil),
+		envs, len(c.Hosts), len(c.Rules), len(c.Routes), notifiers, len(c.Probes), ai, on(c.LightsailEnabled()), on(c.Report != nil),
 		len(c.Auth.APIKeys), len(c.Auth.JWT))
 }
 

@@ -1,4 +1,4 @@
-// Package ai adds a short explanation to new incidents with an OpenAI-compatible chat API (e.g. OpenRouter).
+// Package ai runs the configured agents (one chat call each, no tools) and adds a short explanation to new incidents with an OpenAI-compatible chat API (e.g. OpenRouter).
 // It never decides alarms: rules do. Off unless configured.
 package ai
 
@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/thomkin/loglantern/internal/config"
+	"github.com/thomkin/loglantern/internal/incident"
+	"github.com/thomkin/loglantern/internal/record"
 	"github.com/thomkin/loglantern/internal/store"
 )
 
@@ -26,12 +28,11 @@ var ErrBudget = errors.New("ai: daily budget used up")
 
 // Client calls the chat completions endpoint.
 type Client struct {
-	base, model, key string
-	maxTokens       int
-	daily           int
-	extra           map[string]any
-	http            *http.Client
-	Now             func() time.Time
+	base, key string
+	daily     int
+	extra     map[string]any // ai.extra, under each agent's extra
+	http      *http.Client
+	Now       func() time.Time
 
 	mu    sync.Mutex
 	day   string
@@ -41,7 +42,7 @@ type Client struct {
 // New builds a client from config (cfg.AIEnabled() must be true).
 func New(cfg *config.Config) *Client {
 	a := cfg.AI
-	return &Client{base: strings.TrimRight(a.BaseURL, "/"), model: a.Model, key: cfg.Secret(a.KeyEnv), maxTokens: a.MaxTokens,
+	return &Client{base: strings.TrimRight(a.BaseURL, "/"), key: cfg.Secret(a.KeyEnv),
 		daily: a.DailyCalls, extra: a.Extra, http: &http.Client{Timeout: time.Duration(a.Timeout)}, Now: time.Now}
 }
 
@@ -59,16 +60,25 @@ func (c *Client) take() bool {
 	return true
 }
 
+// Call is one request.
+type Call struct {
+	Model        string
+	MaxTokens    int
+	Extra        map[string]any
+	System, User string
+}
+
 // Ask sends a system and a user message and returns the answer text.
-func (c *Client) Ask(ctx context.Context, system, user string) (string, error) {
+func (c *Client) Ask(ctx context.Context, call Call) (string, error) {
 	if !c.take() {
 		return "", ErrBudget
 	}
 	body := map[string]any{}
 	maps.Copy(body, c.extra)
-	body["model"] = c.model
-	body["max_tokens"] = c.maxTokens
-	body["messages"] = []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": user}}
+	maps.Copy(body, call.Extra)
+	body["model"] = call.Model
+	body["max_tokens"] = call.MaxTokens
+	body["messages"] = []map[string]string{{"role": "system", "content": call.System}, {"role": "user", "content": call.User}}
 	b, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/chat/completions", bytes.NewReader(b))
 	if err != nil {
@@ -117,15 +127,81 @@ func Mask(s string) string {
 	return emailRe.ReplaceAllString(s, "<email>")
 }
 
-const system = `You help an operator understand a server alert. Answer in at most 3 short sentences of plain text: ` +
-	`the likely cause and the first thing to check. Do not repeat the alert. If the context is not enough, say so briefly.`
+// Agents runs the configured agents.
+type Agents struct {
+	c      *Client
+	st     *store.Store
+	agents []config.Agent
+}
 
-// Enricher returns an incident enricher that adds recent log lines and last values of the host as context.
-func Enricher(c *Client, st *store.Store) func(ctx context.Context, in store.Incident) (string, error) {
-	return func(ctx context.Context, in store.Incident) (string, error) {
-		var b strings.Builder
-		fmt.Fprintf(&b, "Alert (%s): %s\nRule: %s, host %s, environment %s, opened %s\n", in.Severity, in.Text, in.Rule, in.Host, in.Env, in.Opened.UTC().Format(time.RFC3339))
-		if hs, err := st.Hosts(ctx, []string{in.Env}); err == nil {
+// NewAgents builds the runner (cfg.AIEnabled() must be true).
+func NewAgents(cfg *config.Config, st *store.Store) *Agents {
+	return &Agents{c: New(cfg), st: st, agents: cfg.AI.Agents}
+}
+
+// SetClient replaces the client (tests).
+func (a *Agents) SetClient(c *Client) { a.c = c }
+
+// Has reports whether any agent runs on this trigger.
+func (a *Agents) Has(on string) bool {
+	for _, ag := range a.agents {
+		if ag.On == on {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Agents) ask(ctx context.Context, ag config.Agent, user string) (string, error) {
+	text, err := a.c.Ask(ctx, Call{Model: ag.Model, MaxTokens: ag.MaxTokens, Extra: ag.Extra, System: ag.Prompt, User: Mask(user)})
+	if err != nil {
+		return "", fmt.Errorf("agent %s: %w", ag.Name, err)
+	}
+	return text, nil
+}
+
+// Incident runs every incident_open agent whose match fits; one note per answer.
+func (a *Agents) Incident(ctx context.Context, in store.Incident, role, service string) ([]incident.Note, error) {
+	var notes []incident.Note
+	var errs []error
+	for _, ag := range a.agents {
+		if ag.On != config.OnIncidentOpen || !ag.Match.Fits(in.Env, in.Host, role, service, in.Severity) {
+			continue
+		}
+		text, err := a.ask(ctx, ag, a.incidentContext(ctx, ag, in))
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		notes = append(notes, incident.Note{Agent: ag.Name, Text: text, Route: ag.Route})
+	}
+	return notes, errors.Join(errs...)
+}
+
+// Report runs every daily_report agent on the report text.
+func (a *Agents) Report(ctx context.Context, report string) ([]incident.Note, error) {
+	var notes []incident.Note
+	var errs []error
+	for _, ag := range a.agents {
+		if ag.On != config.OnDailyReport {
+			continue
+		}
+		text, err := a.ask(ctx, ag, report)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		notes = append(notes, incident.Note{Agent: ag.Name, Text: text, Route: ag.Route})
+	}
+	return notes, errors.Join(errs...)
+}
+
+// incidentContext is the user message: the alert, and as configured the host's last values and recent log lines.
+func (a *Agents) incidentContext(ctx context.Context, ag config.Agent, in store.Incident) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Alert (%s): %s\nRule: %s, host %s, environment %s, opened %s\n", in.Severity, in.Text, in.Rule, in.Host, in.Env, in.Opened.UTC().Format(time.RFC3339))
+	if ag.Context.Values == nil || *ag.Context.Values {
+		if hs, err := a.st.Hosts(ctx, []string{in.Env}); err == nil {
 			for _, h := range hs {
 				if h.Host != in.Host || len(h.Last) == 0 {
 					continue
@@ -136,9 +212,13 @@ func Enricher(c *Client, st *store.Store) func(ctx context.Context, in store.Inc
 				}
 			}
 		}
-		lines, _, err := st.Logs(ctx, store.LogFilter{Envs: []string{in.Env}, Host: in.Host, MaxLevel: 4, From: in.Opened.Add(-30 * time.Minute), To: in.Opened.Add(time.Minute), Limit: 20})
+	}
+	if ag.Context.Logs > 0 {
+		level, _ := record.ParseLevel(ag.Context.Level)
+		lines, _, err := a.st.Logs(ctx, store.LogFilter{Envs: []string{in.Env}, Host: in.Host, MaxLevel: level,
+			From: in.Opened.Add(-time.Duration(ag.Context.Lookback)), To: in.Opened.Add(time.Minute), Limit: ag.Context.Logs})
 		if err == nil && len(lines) > 0 {
-			b.WriteString("\nRecent warnings and errors (newest first):\n")
+			fmt.Fprintf(&b, "\nRecent log lines, %s or worse (newest first):\n", record.LevelNames[level])
 			for _, l := range lines {
 				msg := l.Message
 				if len(msg) > 300 {
@@ -147,6 +227,6 @@ func Enricher(c *Client, st *store.Store) func(ctx context.Context, in store.Inc
 				fmt.Fprintf(&b, "%s %s: %s\n", l.TS.UTC().Format("15:04:05"), l.Service, msg)
 			}
 		}
-		return c.Ask(ctx, system, Mask(b.String()))
 	}
+	return b.String()
 }

@@ -141,14 +141,14 @@ func Due(ctx context.Context, st *store.Store, at string, now time.Time) (bool, 
 	return last != slot.Format("2006-01-02"), nil
 }
 
-// Send builds the report and queues it on route, once per day.
-func Send(ctx context.Context, st *store.Store, envs []string, route string, now time.Time) error {
+// Send builds the report, queues it on route (once per day) and returns its text.
+func Send(ctx context.Context, st *store.Store, envs []string, route string, now time.Time) (string, error) {
 	text, err := Build(ctx, st, envs, now)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := st.Enqueue(ctx, route, text, 0, now); err != nil {
-		return err
+		return "", err
 	}
-	return st.SetMeta(ctx, metaKey, now.UTC().Format("2006-01-02"))
+	return text, st.SetMeta(ctx, metaKey, now.UTC().Format("2006-01-02"))
 }

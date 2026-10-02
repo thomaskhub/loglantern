@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
@@ -18,8 +17,14 @@ import (
 // HostRule is the rule name used for missing hosts.
 const HostRule = "host-missing"
 
-// Enricher adds an AI explanation to a new incident (optional).
-type Enricher func(ctx context.Context, in store.Incident) (string, error)
+// Note is one AI answer about an incident.
+type Note struct {
+	Agent, Text string
+	Route       string // "" = the incident's routes
+}
+
+// Enricher runs the AI agents for a new incident (optional). role and service are the incident's labels.
+type Enricher func(ctx context.Context, in store.Incident, role, service string) ([]Note, error)
 
 // Manager opens and resolves incidents and queues their messages.
 type Manager struct {
@@ -106,9 +111,7 @@ func (m *Manager) Routes(t rules.Transition) []string {
 	var out []string
 	role := m.roleOf(t.Env, t.Host)
 	for _, r := range m.routes {
-		mt := r.Match
-		if (mt.Env == "" || mt.Env == t.Env) && (mt.Host == "" || mt.Host == t.Host) && (mt.Role == "" || mt.Role == role) &&
-			(mt.Service == "" || mt.Service == m.service[t.Rule]) && (len(mt.Severity) == 0 || slices.Contains(mt.Severity, t.Severity)) {
+		if r.Match.Fits(t.Env, t.Host, role, m.service[t.Rule], t.Severity) {
 			out = append(out, r.Name)
 		}
 	}
@@ -140,19 +143,31 @@ func (m *Manager) followUp(in store.Incident, t rules.Transition) {
 		defer func() { <-m.bg }()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		text, err := m.enrich(ctx, in)
-		if err != nil || strings.TrimSpace(text) == "" {
-			if err != nil {
-				m.log.Warn("ai enrichment", "incident", in.ID, "err", err)
+		notes, err := m.enrich(ctx, in, m.roleOf(in.Env, in.Host), m.service[in.Rule])
+		if err != nil {
+			m.log.Warn("ai enrichment", "incident", in.ID, "err", err)
+		}
+		var stored []string
+		for _, n := range notes {
+			if strings.TrimSpace(n.Text) == "" {
+				continue
 			}
-			return
+			stored = append(stored, n.Agent+": "+n.Text)
+			msg := fmt.Sprintf("[AI %s] %s/%s #%d: %s", n.Agent, in.Env, in.Host, in.ID, n.Text)
+			var err error
+			if n.Route != "" {
+				err = m.st.Enqueue(ctx, n.Route, msg, in.ID, time.Now())
+			} else {
+				err = m.queue(ctx, t, in.ID, msg, time.Now())
+			}
+			if err != nil {
+				m.log.Warn("ai message", "err", err)
+			}
 		}
-		if err := m.st.SetAIText(ctx, in.ID, text); err != nil {
-			m.log.Warn("ai text", "err", err)
-			return
-		}
-		if err := m.queue(ctx, t, in.ID, fmt.Sprintf("[AI] %s/%s #%d: %s", in.Env, in.Host, in.ID, text), time.Now()); err != nil {
-			m.log.Warn("ai message", "err", err)
+		if len(stored) > 0 {
+			if err := m.st.SetAIText(ctx, in.ID, strings.Join(stored, "\n\n")); err != nil {
+				m.log.Warn("ai text", "err", err)
+			}
 		}
 	}()
 }

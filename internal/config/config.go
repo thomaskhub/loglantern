@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/thomkin/loglantern/internal/record"
 )
 
 // Duration is a time.Duration written as "90s", "5m", "120h".
@@ -25,6 +28,36 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 		return fmt.Errorf("line %d: %w", n.Line, err)
 	}
 	*d = Duration(v)
+	return nil
+}
+
+// loadPrompts reads prompt_file of every agent into Prompt; agents without either get the default prompt.
+func (c *Config) loadPrompts(dir string) error {
+	if c.AI == nil {
+		return nil
+	}
+	for i := range c.AI.Agents {
+		a := &c.AI.Agents[i]
+		switch {
+		case a.Prompt != "" && a.PromptFile != "":
+			return fmt.Errorf("ai.agents.%s: use prompt or prompt_file, not both", a.Name)
+		case a.PromptFile != "":
+			p := a.PromptFile
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(dir, p)
+			}
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return fmt.Errorf("ai.agents.%s: %w", a.Name, err)
+			}
+			a.Prompt = strings.TrimSpace(string(b))
+		case a.Prompt == "":
+			a.Prompt = DefaultAgentPrompt
+		}
+		if strings.TrimSpace(a.Prompt) == "" {
+			return fmt.Errorf("ai.agents.%s: prompt is empty", a.Name)
+		}
+	}
 	return nil
 }
 
@@ -111,6 +144,12 @@ type Match struct {
 	Severity []string `yaml:"severity"`
 }
 
+// Fits reports whether the matcher accepts these labels (empty fields match everything).
+func (m Match) Fits(env, host, role, service, severity string) bool {
+	return (m.Env == "" || m.Env == env) && (m.Host == "" || m.Host == host) && (m.Role == "" || m.Role == role) &&
+		(m.Service == "" || m.Service == service) && (len(m.Severity) == 0 || slices.Contains(m.Severity, severity))
+}
+
 // Rule types.
 const (
 	RuleThreshold = "threshold" // numeric series op value for a duration
@@ -180,6 +219,40 @@ type AI struct {
 	MaxTokens  int            `yaml:"max_tokens"`
 	Timeout    Duration       `yaml:"timeout"`
 	Extra      map[string]any `yaml:"extra"` // merged into the request, e.g. reasoning: {effort: none}
+	Agents     []Agent        `yaml:"agents"`
+}
+
+// AI agent triggers.
+const (
+	OnIncidentOpen = "incident_open" // context: alert, last values, recent log lines of the host
+	OnDailyReport  = "daily_report"  // context: the daily report text
+)
+
+// DefaultAgentPrompt is used by agents without prompt or prompt_file.
+const DefaultAgentPrompt = `You help an operator understand a server alert. Answer in at most 3 short sentences of plain text: ` +
+	`the likely cause and the first thing to check. Do not repeat the alert. If the context is not enough, say so briefly.`
+
+// Agent is one AI step: when it runs, which model, which instructions and how much context it gets.
+// It makes one call without tools; its answer is only sent as a message, never used to decide alarms.
+type Agent struct {
+	Name       string         `yaml:"name"`
+	On         string         `yaml:"on"`    // incident_open | daily_report
+	Match      Match          `yaml:"match"` // incident_open only
+	Model      string         `yaml:"model"` // default ai.model
+	MaxTokens  int            `yaml:"max_tokens"`
+	Prompt     string         `yaml:"prompt"`      // inline system prompt
+	PromptFile string         `yaml:"prompt_file"` // or a file (relative to the config file)
+	Context    AgentContext   `yaml:"context"`
+	Route      string         `yaml:"route"` // "" = the incident's routes (or the report route)
+	Extra      map[string]any `yaml:"extra"` // merged over ai.extra
+}
+
+// AgentContext limits what an incident agent sees.
+type AgentContext struct {
+	Logs     int      `yaml:"logs"`     // recent log lines of the host (default 20, -1 = none)
+	Level    string   `yaml:"level"`    // this level or worse (default warning)
+	Lookback Duration `yaml:"lookback"` // before the incident (default 30m)
+	Values   *bool    `yaml:"values"`   // last values of the host (default true)
 }
 
 // Probe is an HTTP check; results become the series probe.up and probe.latency_ms.
@@ -261,11 +334,13 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	return Parse(b)
+	return parse(b, filepath.Dir(path))
 }
 
-// Parse parses YAML, applies defaults, resolves secrets and validates.
-func Parse(b []byte) (*Config, error) {
+// Parse parses YAML, applies defaults, resolves secrets and validates; prompt files are relative to the working directory.
+func Parse(b []byte) (*Config, error) { return parse(b, ".") }
+
+func parse(b []byte, dir string) (*Config, error) {
 	var c Config
 	dec := yaml.NewDecoder(bytesReader(b))
 	dec.KnownFields(true)
@@ -274,6 +349,9 @@ func Parse(b []byte) (*Config, error) {
 	}
 	c.defaults()
 	c.resolveSecrets()
+	if err := c.loadPrompts(dir); err != nil {
+		return nil, err
+	}
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
@@ -345,6 +423,29 @@ func (c *Config) defaults() {
 			c.AI.MaxTokens = 400
 		}
 		def(&c.AI.Timeout, 60*time.Second)
+		if len(c.AI.Agents) == 0 {
+			c.AI.Agents = []Agent{{Name: "explain", On: OnIncidentOpen}}
+		}
+		for i := range c.AI.Agents {
+			a := &c.AI.Agents[i]
+			if a.Model == "" {
+				a.Model = c.AI.Model
+			}
+			if a.MaxTokens == 0 {
+				a.MaxTokens = c.AI.MaxTokens
+			}
+			if a.Context.Logs == 0 {
+				a.Context.Logs = 20
+			}
+			if a.Context.Level == "" {
+				a.Context.Level = "warning"
+			}
+			def(&a.Context.Lookback, 30*time.Minute)
+			if a.Context.Values == nil {
+				t := true
+				a.Context.Values = &t
+			}
+		}
 	}
 	if c.Lightsail != nil {
 		def(&c.Lightsail.Interval, 15*time.Minute)
@@ -472,8 +573,29 @@ func (c *Config) validate() error {
 			bad("probes[%d]: name, url and a configured env are required", i)
 		}
 	}
-	if c.AI != nil && c.AI.Model == "" {
-		bad("ai: model is required")
+	if c.AI != nil {
+		names := map[string]bool{}
+		for i, a := range c.AI.Agents {
+			if !nameRe.MatchString(a.Name) || names[a.Name] {
+				bad("ai.agents[%d]: name missing, invalid or duplicate", i)
+			}
+			names[a.Name] = true
+			if a.On != OnIncidentOpen && a.On != OnDailyReport {
+				bad("ai.agents.%s: on must be %s or %s", a.Name, OnIncidentOpen, OnDailyReport)
+			}
+			if a.Model == "" {
+				bad("ai.agents.%s: model is required (or set ai.model)", a.Name)
+			}
+			if a.Route != "" && !routes[a.Route] {
+				bad("ai.agents.%s: route %q is not configured", a.Name, a.Route)
+			}
+			if _, ok := record.ParseLevel(a.Context.Level); !ok {
+				bad("ai.agents.%s: context.level %q unknown", a.Name, a.Context.Level)
+			}
+			if a.On == OnDailyReport && (a.Match.Env != "" || a.Match.Host != "" || a.Match.Role != "" || a.Match.Service != "" || len(a.Match.Severity) > 0) {
+				bad("ai.agents.%s: match only applies to %s", a.Name, OnIncidentOpen)
+			}
+		}
 	}
 	if c.Report != nil && !routes[c.Report.Route] {
 		bad("report: route %q is not configured", c.Report.Route)

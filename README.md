@@ -96,9 +96,13 @@ gives `logs`). Put the API behind a TLS reverse proxy.
 
 ## Optional parts
 
-- **AI** (`ai:`): after an incident opens, the rule text, last values and recent warnings of the host
-  (with e-mails, tokens and passwords masked) go to the model; the answer is sent as a follow-up and
-  stored on the incident. A daily call budget applies. Alarms never depend on it.
+- **AI agents** (`ai:`): any OpenAI-compatible API (e.g. OpenRouter). Each agent in `ai.agents` sets
+  when it runs (`on: incident_open` with an optional `match`, or `on: daily_report`), `model`,
+  instructions (`prompt` inline or `prompt_file`), how much context it gets
+  (`context: {logs, level, lookback, values}`) and an optional `route` for its answer. An agent makes
+  one call without tools. Its answer is sent as a follow-up (`[AI <name>] …`) and stored on the incident;
+  e-mails, tokens and passwords are masked first. All agents share a daily call budget, and alarms
+  never depend on them. Without `agents`, a built-in `explain` agent runs on every new incident.
 - **Probes** (`probes:`): series `probe.<name>.up`, `probe.<name>.ms` and text `probe.<name>.status`.
 - **Lightsail** (`lightsail:`): active only when both credential variables are set. Every interval
   (default 15 min) it reads `BurstCapacityPercentage` and `BurstCapacityTime` into `lightsail.burst_pct`

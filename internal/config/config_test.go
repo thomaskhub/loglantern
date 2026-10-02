@@ -105,3 +105,34 @@ func TestParseDurationDays(t *testing.T) {
 		}
 	}
 }
+
+func TestAgents(t *testing.T) {
+	t.Setenv("LL_T", "t")
+	base := "envs: {uat: {ingest_token_env: LL_T}}\nroutes: [{name: all, notifier: webhook}]\nnotifiers: {webhook: {url_env: LL_T}}\nai:\n  model: m\n"
+	c, err := Parse([]byte(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.AI.Agents
+	if len(a) != 1 || a[0].Name != "explain" || a[0].On != OnIncidentOpen || a[0].Model != "m" || a[0].Prompt != DefaultAgentPrompt ||
+		a[0].MaxTokens != 400 || a[0].Context.Logs != 20 || a[0].Context.Level != "warning" || !*a[0].Context.Values {
+		t.Fatalf("G6 default agent: %+v", a)
+	}
+	for name, yaml := range map[string]string{
+		"both prompts":    "  agents: [{name: x, on: incident_open, prompt: a, prompt_file: b}]",
+		"bad trigger":     "  agents: [{name: x, on: hourly}]",
+		"unknown route":   "  agents: [{name: x, on: incident_open, route: nope}]",
+		"match on report": "  agents: [{name: x, on: daily_report, match: {env: uat}}]",
+		"missing file":    "  agents: [{name: x, on: incident_open, prompt_file: /nonexistent.md}]",
+		"duplicate":       "  agents: [{name: x, on: incident_open}, {name: x, on: daily_report}]",
+		"bad level":       "  agents: [{name: x, on: incident_open, context: {level: loud}}]",
+		"unknown field":   "  agents: [{name: x, on: incident_open, tools: [shell]}]",
+	} {
+		if _, err := Parse([]byte(base + yaml)); err == nil {
+			t.Errorf("G7 %s accepted", name)
+		}
+	}
+	if _, err := Parse([]byte(strings.Replace(base, "  model: m\n", "  agents: [{name: x, on: incident_open}]\n", 1))); err == nil {
+		t.Error("G7 agent without any model accepted")
+	}
+}

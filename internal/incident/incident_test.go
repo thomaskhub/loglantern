@@ -117,11 +117,14 @@ func TestHostMissing(t *testing.T) {
 }
 
 func TestEnrichment(t *testing.T) {
-	m, st := setup(t, func(ctx context.Context, in store.Incident) (string, error) {
+	m, st := setup(t, func(ctx context.Context, in store.Incident, role, service string) ([]Note, error) {
 		if in.Host == "bad" {
-			return "", errors.New("down")
+			return nil, errors.New("down")
 		}
-		return "probably a backup job", nil
+		if role != "api" {
+			t.Errorf("I7 role passed: %q", role)
+		}
+		return []Note{{Agent: "explain", Text: "probably a backup job"}, {Agent: "dba", Text: "check locks", Route: "db"}, {Agent: "empty", Text: " "}}, nil
 	})
 	ctx := context.Background()
 	_ = m.Handle(ctx, []rules.Transition{
@@ -130,12 +133,13 @@ func TestEnrichment(t *testing.T) {
 	}, t0)
 	m.Wait()
 	got := due(t, st)
-	if len(got) != 3 || !strings.Contains(strings.Join(got, "\n"), "all|[AI] uat/h1 #1: probably a backup job") {
-		t.Fatalf("I7 follow-up: %q", got)
+	all := strings.Join(got, "\n")
+	if len(got) != 4 || !strings.Contains(all, "all|[AI explain] uat/h1 #1: probably a backup job") || !strings.Contains(all, "db|[AI dba] uat/h1 #1: check locks") {
+		t.Fatalf("I7 follow-ups (incident routes, own route, empty skipped): %q", got)
 	}
 	ins, _ := st.Incidents(ctx, store.IncidentFilter{})
 	for _, in := range ins {
-		if (in.Host == "h1") != (in.AIText != "") {
+		if (in.Host == "h1") != (in.AIText == "explain: probably a backup job\n\ndba: check locks") {
 			t.Fatalf("I7 ai text stored: %+v", in)
 		}
 	}

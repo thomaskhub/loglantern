@@ -2,6 +2,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -48,6 +49,8 @@ type App struct {
 	ing    *ingest.Handler
 	api    *api.Server
 	envs   []string
+	agents *ai.Agents // nil when AI is off
+	bgWork sync.WaitGroup
 
 	in   chan []record.Record
 	wake chan struct{}
@@ -81,8 +84,13 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	}
 	var enrich incident.Enricher
 	if cfg.AIEnabled() {
-		enrich = ai.Enricher(ai.New(cfg), st)
-		log.Info("ai enrichment on", "model", cfg.AI.Model)
+		a.agents = ai.NewAgents(cfg, st)
+		enrich = a.agents.Incident
+		var names []string
+		for _, ag := range cfg.AI.Agents {
+			names = append(names, ag.Name+"("+ag.On+", "+ag.Model+")")
+		}
+		log.Info("ai agents on", "agents", names)
 	}
 	a.mgr = incident.New(st, cfg, a.reg.Role, enrich, log)
 	a.Notifiers = notify.FromConfig(cfg)
@@ -250,6 +258,7 @@ func (a *App) Run(ctx context.Context, ingestLn, apiLn net.Listener) error {
 	bgw.Wait()
 	a.drain(sctx)
 	a.mgr.Wait()
+	a.bgWork.Wait()
 	a.log.Info("stopped")
 	return nil
 }
@@ -353,11 +362,34 @@ func (a *App) Tick(ctx context.Context) {
 		if due, err := report.Due(ctx, a.st, r.At, now); err != nil {
 			a.log.Error("report", "err", err)
 		} else if due {
-			if err := report.Send(ctx, a.st, a.envs, r.Route, now); err != nil {
+			text, err := report.Send(ctx, a.st, a.envs, r.Route, now)
+			if err != nil {
 				a.log.Error("report", "err", err)
+			} else if a.agents != nil && a.agents.Has(config.OnDailyReport) {
+				a.reviewReport(text, r.Route)
 			}
 		}
 	}
+}
+
+// reviewReport runs the daily_report agents in the background and queues their answers.
+func (a *App) reviewReport(text, route string) {
+	a.bgWork.Add(1)
+	go func() {
+		defer a.bgWork.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		notes, err := a.agents.Report(ctx, text)
+		if err != nil {
+			a.log.Warn("ai report", "err", err)
+		}
+		for _, n := range notes {
+			to := cmp.Or(n.Route, route)
+			if err := a.st.Enqueue(ctx, to, "[AI "+n.Agent+"] "+n.Text, 0, time.Now()); err != nil {
+				a.log.Warn("ai report message", "err", err)
+			}
+		}
+	}()
 }
 
 func (a *App) retain(ctx context.Context) {

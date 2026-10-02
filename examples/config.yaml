@@ -102,11 +102,28 @@ notifiers:
   webhook:
     url_env: LOGLANTERN_WEBHOOK_URL
 
-# optional: a short explanation follows each new incident (never decides alarms)
+# optional AI agents: one call each, no tools; answers are sent as follow-up messages
+# and never decide alarms. Without "agents" one default "explain" agent runs on every incident.
 ai:
-  model: openai/gpt-4o-mini
   key_env: OPENROUTER_API_KEY
-  daily_calls: 50
+  model: openai/gpt-4o-mini          # default model of all agents
+  daily_calls: 50                    # budget shared by all agents
+  agents:
+    - name: explain
+      on: incident_open
+      match: {severity: [warning, critical]}
+    - name: dba
+      on: incident_open
+      match: {role: db}
+      model: anthropic/claude-haiku-4.5
+      prompt_file: agents/dba.md     # relative to this file
+      context: {logs: 40, level: notice, lookback: 1h}
+      route: db
+    - name: report-review
+      on: daily_report
+      prompt: |
+        You read a daily monitoring report. Name at most 3 things worth acting on today,
+        most important first, one line each. If nothing needs action, say so.
 
 probes:
   - {name: website, env: prod, url: "https://www.example.org/health", contains: ok}
