@@ -1,4 +1,5 @@
-// Package probe checks URLs and emits metrics probe.<name>.up and probe.<name>.ms.
+// Package probe checks URLs and emits probe.<name>.up, probe.<name>.ms, probe.<name>.cert_days (HTTPS)
+// and the text probe.<name>.status.
 package probe
 
 import (
@@ -22,6 +23,7 @@ func Check(ctx context.Context, c *http.Client, p config.Probe, now func() time.
 	defer cancel()
 	start := now()
 	up, detail := 0.0, ""
+	certDays, hasCert := 0.0, false
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.URL, nil)
 	if err == nil {
 		req.Header.Set("User-Agent", "loglantern-probe")
@@ -29,6 +31,10 @@ func Check(ctx context.Context, c *http.Client, p config.Probe, now func() time.
 		if resp, err = c.Do(req); err == nil {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
+			if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
+				certDays = resp.TLS.PeerCertificates[0].NotAfter.Sub(now()).Hours() / 24
+				hasCert = true
+			}
 			switch {
 			case resp.StatusCode != p.ExpectStatus:
 				detail = "status " + resp.Status
@@ -46,9 +52,13 @@ func Check(ctx context.Context, c *http.Client, p config.Probe, now func() time.
 	if host == "" {
 		host = "probe"
 	}
-	return record.Record{Kind: record.KindMetric, TS: now(), Env: p.Env, Host: host, Service: "probe", Synthetic: true,
+	rec := record.Record{Kind: record.KindMetric, TS: now(), Env: p.Env, Host: host, Service: "probe", Synthetic: true,
 		Values: map[string]float64{"probe." + p.Name + ".up": up, "probe." + p.Name + ".ms": float64(now().Sub(start).Milliseconds())},
 		Texts:  map[string]string{"probe." + p.Name + ".status": detail}}
+	if hasCert {
+		rec.Values["probe."+p.Name+".cert_days"] = float64(int(certDays*10)) / 10
+	}
+	return rec
 }
 
 func shortErr(err error) string {

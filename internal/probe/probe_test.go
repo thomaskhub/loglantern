@@ -52,3 +52,21 @@ func TestCheck(t *testing.T) {
 		t.Errorf("B2 refused: %+v", r)
 	}
 }
+
+func TestCertDays(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	p := config.Probe{Name: "tls", Env: "uat", URL: srv.URL, Timeout: config.Duration(time.Second), ExpectStatus: 200}
+	r := Check(context.Background(), srv.Client(), p, time.Now)
+	days := r.Values["probe.tls.cert_days"]
+	want := srv.Certificate().NotAfter.Sub(time.Now()).Hours() / 24
+	if r.Values["probe.tls.up"] != 1 || days < want-1 || days > want+1 {
+		t.Fatalf("B3 cert days %v want ~%v: %+v", days, want, r)
+	}
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer plain.Close()
+	p.URL = plain.URL
+	if _, ok := Check(context.Background(), plain.Client(), p, time.Now).Values["probe.tls.cert_days"]; ok {
+		t.Fatal("B3 cert days on plain http")
+	}
+}

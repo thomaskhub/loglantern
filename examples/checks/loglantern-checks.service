@@ -1,0 +1,8 @@
+[Unit]
+Description=loglantern checks (facts to journald)
+
+[Service]
+Type=oneshot
+# every executable in this directory; each writes facts with the identifier loglantern-fact
+ExecStart=/bin/sh -c 'for c in /usr/local/lib/loglantern-checks/*.sh; do [ -x "$c" ] && "$c"; done'
+Nice=10
