@@ -1,5 +1,6 @@
 # loglantern example configuration. Secrets are never written here: every *_env names an
-# environment variable (e.g. from a systemd EnvironmentFile).
+# environment variable (e.g. from a systemd EnvironmentFile); NAME_FILE=/path reads it from a file.
+# Reload after changes: systemctl reload loglantern (SIGHUP).
 
 listen:
   ingest: "0.0.0.0:8440"   # Fluent Bit; keep it on the private network
@@ -26,65 +27,28 @@ missing_after: 3m
 tick: 15s
 window: 2h
 
+# series come from Fluent Bit metrics (cpu.*), the example checks in examples/checks (mem.*, disk.*,
+# load.*, systemd.*, postgres.*, replication.*, backup.*), probes (probe.*) and Lightsail (lightsail.*)
 rules:
-  - name: cpu-high
-    type: threshold
-    series: cpu.cpu_p
-    op: ">"
-    value: "90"
-    for: 10m
-    severity: warning
-  - name: mem-high
-    type: threshold
-    series: mem.Mem.used_pct      # facts or metrics you send
-    op: ">="
-    value: "90"
-    for: 5m
-  - name: disk-full
-    type: threshold
-    series: disk.used_pct          # from a check fact: {"fact":"disk","used_pct":93}
-    op: ">="
-    value: "85"
-    severity: critical
-    match: {role: db}
-  - name: backup-failed
-    type: text
-    series: backup.status          # {"fact":"backup","status":"failed"}
-    op: "!="
-    value: ok
-    severity: critical
-    text: "{rule} on {host}: {detail}"
-  - name: error-burst
-    type: lograte
-    level: err                     # error and worse
-    count: 20
-    per: 5m
-  - name: oom
-    type: lograte
-    pattern: "Out of memory|oom-kill"
-    count: 1
-    per: 5m
-    severity: critical
-  - name: traffic-anomaly
-    type: anomaly
-    series: app.requests_per_min
-    zscore: 4
-    min_samples: 30
-    min_delta: 50
-    severity: info
-  - name: cpu-credits-low
-    type: threshold
-    series: lightsail.burst_pct
-    op: "<"
-    value: "20"
-    for: 30m
-  - name: site-down
-    type: threshold
-    series: probe.website.up
-    op: "<"
-    value: "1"
-    for: 10m
-    severity: critical
+  - {name: cpu-high, type: threshold, series: cpu.cpu_p, op: ">", value: "90", for: 10m}
+  - {name: mem-high, type: threshold, series: mem.used_pct, op: ">=", value: "90", for: 5m}
+  - {name: swap-high, type: threshold, series: mem.swap_pct, op: ">=", value: "50", for: 15m}
+  - {name: disk-full, type: threshold, series: disk.used_pct, op: ">=", value: "85", severity: critical}
+  - {name: units-failed, type: threshold, series: systemd.failed, op: ">", value: "0", for: 5m,
+     text: "{host}: failed systemd units ({value})"}
+  - {name: checks-stopped, type: absent, series: mem.used_pct, max_age: 15m}   # the check timer died
+  - {name: backup-failed, type: text, series: backup.status, op: "!=", value: ok, severity: critical,
+     match: {role: db}, text: "{rule} on {host}: {detail}"}
+  - {name: backup-stale, type: threshold, series: backup.age_h, op: ">", value: "36", match: {role: db}}
+  - {name: backup-missing, type: absent, series: backup.age_h, max_age: 2h, match: {role: db}}
+  - {name: replication-lag, type: threshold, series: replication.lag_s, op: ">", value: "300", for: 5m}
+  - {name: error-burst, type: lograte, level: err, count: 20, per: 5m}       # error and worse
+  - {name: oom, type: lograte, pattern: "Out of memory|oom-kill", count: 1, per: 5m, severity: critical}
+  - {name: traffic-anomaly, type: anomaly, series: app.requests_per_min, zscore: 4, min_samples: 30,
+     min_delta: 50, severity: info}
+  - {name: cpu-credits-low, type: threshold, series: lightsail.burst_pct, op: "<", value: "20", for: 30m}
+  - {name: site-down, type: threshold, series: probe.website.up, op: "<", value: "1", for: 10m, severity: critical}
+  - {name: cert-expiring, type: threshold, series: probe.website.cert_days, op: "<", value: "14"}
 
 # notifiers: named outputs, each with exactly one type (telegram, slack, email, webhook)
 notifiers:
@@ -111,7 +75,7 @@ notifiers:
 
 # routes: every route whose match fits gets the message; send lists "notifier" or "notifier/target"
 routes:
-  - {name: prod, match: {env: prod}, send: [tg/prod, team/prod]}
+  - {name: prod, match: {env: prod}, send: [tg/prod, team/prod], repeat: 4h}   # remind while open
   - {name: uat,  match: {env: uat},  send: [tg/uat]}
   - {name: db,   match: {role: db},  send: [tg/db]}
   - {name: pager, match: {env: prod, severity: [critical]}, send: [pager]}
@@ -159,16 +123,24 @@ lightsail:
     web-1-instance: {env: prod, host: web-1}
     db-1-instance: {env: prod, host: db-1}
 
-report: {at: "06:00", route: daily}
+report: {at: "07:00", tz: Europe/Berlin, route: daily}
+
+# maintenance windows mute notifications (incidents are still recorded and announced afterwards if
+# still open); ad-hoc silences are created with POST /api/v1/silences (role admin)
+maintenance:
+  - {name: weekly-patching, days: [sun], from: "02:00", to: "04:00", tz: Europe/Berlin}
+  - {name: db-migration, match: {role: db}, starts: 2026-11-01T20:00:00Z, ends: 2026-11-01T22:00:00Z}
 
 auth:
   api_keys:
     - {name: status-board, key_env: LOGLANTERN_KEY_BOARD, role: viewer, envs: [prod]}
+    - {name: ops-cli, key_env: LOGLANTERN_KEY_OPS, role: admin}     # may manage silences
   jwt:
     - name: admin-app
       public_key_file: /etc/loglantern/admin-app.pem
       roles:
-        logs:   [{claim: permissions.admin, equals: true}, {claim: permissions.developer, equals: true}]
+        admin:  [{claim: permissions.admin, equals: true}]
+        logs:   [{claim: permissions.developer, equals: true}]
         viewer: [{claim: permissions.staff, equals: true}]
 
 cors: ["https://admin.example.org"]

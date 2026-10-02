@@ -203,3 +203,12 @@ func TestAbsent(t *testing.T) {
 		t.Fatalf("E11 series: %v", s)
 	}
 }
+
+func TestAbsentOutOfOrder(t *testing.T) {
+	e := engine(t, config.Rule{Name: "gone", Type: "absent", Series: "backup.age_h", MaxAge: dur(time.Hour)})
+	val(e, "h1", "backup.age_h", t0.Add(2*time.Hour), 1)
+	val(e, "h1", "backup.age_h", t0, 1) // late, older value must not move last seen back
+	if got := keys(e.Evaluate(t0.Add(150 * time.Minute))); got != "" {
+		t.Fatalf("E12 older value moved last seen back: %q", got)
+	}
+}

@@ -44,8 +44,8 @@ auth: {api_keys: [{name: dash, key_env: LL_KEY, role: logs}]}
 	_ = os.WriteFile(filepath.Join(dir, "c.yaml"), []byte(cfg), 0o644)
 	cmd := exec.Command(bin, "-config", filepath.Join(dir, "c.yaml"), "-log-level", "warn")
 	cmd.Env = append(os.Environ(), "LL_TOKEN=tok-uat", "LL_TOKEN_PROD=tok-prod", "LL_HOOK=http://127.0.0.1:1/", "LL_KEY=dash-key-0123456789")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := &lockedBuffer{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

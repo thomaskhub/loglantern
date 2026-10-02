@@ -66,8 +66,8 @@ notifiers: {hook: {webhook: {url_env: LL_HOOK}}}
 	write("90")
 	cmd := exec.Command(bin, "-config", cfgPath)
 	cmd.Env = append(os.Environ(), "LL_TOKEN=tok", "LL_HOOK="+hook.URL)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := &lockedBuffer{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -75,15 +75,25 @@ notifiers: {hook: {webhook: {url_env: LL_HOOK}}}
 	waitUp(t, fmt.Sprintf("127.0.0.1:%d", ip))
 
 	var sent, failed atomic.Int64
+	// like Fluent Bit, retry once when a keep-alive connection is closed by the old generation
 	post := func(v float64) {
 		b, _ := json.Marshal([]map[string]any{{"host": "h1", "kind": "metric", "source": "cpu", "cpu_p": v}})
-		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/", ip), bytes.NewReader(b))
-		req.Header.Set("Authorization", "Bearer tok")
-		resp, err := http.DefaultClient.Do(req)
+		var resp *http.Response
+		var err error
+		for try := 0; try < 2; try++ {
+			req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/", ip), bytes.NewReader(b))
+			req.Header.Set("Authorization", "Bearer tok")
+			if resp, err = http.DefaultClient.Do(req); err == nil {
+				break
+			}
+		}
 		if err != nil || resp.StatusCode != 204 {
 			failed.Add(1)
 			if resp != nil {
+				t.Logf("post status %d", resp.StatusCode)
 				resp.Body.Close()
+			} else {
+				t.Logf("post error: %v", err)
 			}
 			return
 		}
@@ -130,4 +140,21 @@ notifiers: {hook: {webhook: {url_env: LL_HOOK}}}
 	}
 	post(10)
 	waitHook("[RESOLVED] uat/h1")
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }

@@ -100,3 +100,22 @@ func TestDueTimeZone(t *testing.T) {
 		t.Error("Y5 not due at 06:00 Kolkata")
 	}
 }
+
+func TestDueLocalDate(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ll.db"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	akl, _ := time.LoadLocation("Pacific/Auckland") // UTC+13 in October: local date is a day ahead
+	ctx := context.Background()
+	at := time.Date(2026, 10, 1, 17, 30, 0, 0, time.UTC) // 2026-10-02 06:30 Auckland
+	out := notify.NewOutbox(st, &config.Config{Routes: []config.Route{{Name: "d", Send: []string{"x"}}}})
+	if due, _ := Due(ctx, st, "06:00", akl, at); !due {
+		t.Fatal("Y6 not due")
+	}
+	_, _ = Send(ctx, st, out, nil, "d", akl, at)
+	if due, _ := Due(ctx, st, "06:00", akl, at.Add(time.Hour)); due {
+		t.Fatal("Y6 due twice on the same local day")
+	}
+}
