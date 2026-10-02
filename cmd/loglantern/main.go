@@ -15,10 +15,10 @@ import (
 	"time"
 	_ "time/tzdata" // maintenance and report time zones on minimal images
 
-	"github.com/thomkin/loglantern/internal/app"
-	"github.com/thomkin/loglantern/internal/auth"
-	"github.com/thomkin/loglantern/internal/config"
-	"github.com/thomkin/loglantern/internal/rules"
+	"github.com/thomaskhub/loglantern/internal/app"
+	"github.com/thomaskhub/loglantern/internal/auth"
+	"github.com/thomaskhub/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/rules"
 )
 
 var version = "dev"

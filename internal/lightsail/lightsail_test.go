@@ -12,7 +12,7 @@ import (
 	ls "github.com/aws/aws-sdk-go-v2/service/lightsail"
 	"github.com/aws/aws-sdk-go-v2/service/lightsail/types"
 
-	"github.com/thomkin/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/config"
 )
 
 var now = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)

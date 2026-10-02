@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/auth"
-	"github.com/thomkin/loglantern/internal/store"
+	"github.com/thomaskhub/loglantern/internal/auth"
+	"github.com/thomaskhub/loglantern/internal/store"
 )
 
 //go:embed openapi.json

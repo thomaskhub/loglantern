@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/config"
-	"github.com/thomkin/loglantern/internal/hosts"
-	"github.com/thomkin/loglantern/internal/notify"
-	"github.com/thomkin/loglantern/internal/rules"
-	"github.com/thomkin/loglantern/internal/store"
+	"github.com/thomaskhub/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/hosts"
+	"github.com/thomaskhub/loglantern/internal/notify"
+	"github.com/thomaskhub/loglantern/internal/rules"
+	"github.com/thomaskhub/loglantern/internal/store"
 )
 
 // HostRule is the rule name used for missing hosts.

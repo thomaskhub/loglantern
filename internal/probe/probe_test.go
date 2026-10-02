@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/config"
 )
 
 func TestCheck(t *testing.T) {

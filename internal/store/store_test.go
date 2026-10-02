@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/record"
+	"github.com/thomaskhub/loglantern/internal/record"
 )
 
 var t0 = time.Date(2026, 10, 2, 12, 0, 30, 0, time.UTC)

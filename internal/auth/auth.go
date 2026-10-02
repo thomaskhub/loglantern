@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/config"
 )
 
 // Principal is an authenticated caller.

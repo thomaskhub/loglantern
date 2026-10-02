@@ -13,8 +13,8 @@ import (
 	ls "github.com/aws/aws-sdk-go-v2/service/lightsail"
 	"github.com/aws/aws-sdk-go-v2/service/lightsail/types"
 
-	"github.com/thomkin/loglantern/internal/config"
-	"github.com/thomkin/loglantern/internal/record"
+	"github.com/thomaskhub/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/record"
 )
 
 // API is the part of the Lightsail client used here.

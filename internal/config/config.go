@@ -15,7 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/thomkin/loglantern/internal/record"
+	"github.com/thomaskhub/loglantern/internal/record"
 )
 
 // Duration is a time.Duration written as "90s", "5m", "120h".

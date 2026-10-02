@@ -17,10 +17,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/config"
-	"github.com/thomkin/loglantern/internal/incident"
-	"github.com/thomkin/loglantern/internal/record"
-	"github.com/thomkin/loglantern/internal/store"
+	"github.com/thomaskhub/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/incident"
+	"github.com/thomaskhub/loglantern/internal/record"
+	"github.com/thomaskhub/loglantern/internal/store"
 )
 
 // ErrBudget is returned when the daily call budget is used up.

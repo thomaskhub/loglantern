@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/record"
+	"github.com/thomaskhub/loglantern/internal/record"
 )
 
 // The example checks print facts that loglantern turns into the documented series.

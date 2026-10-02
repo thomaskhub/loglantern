@@ -1,6 +1,6 @@
 # loglantern
 
-[![ci](https://github.com/thomkin/loglantern/actions/workflows/ci.yml/badge.svg)](https://github.com/thomkin/loglantern/actions/workflows/ci.yml)
+[![ci](https://github.com/thomaskhub/loglantern/actions/workflows/ci.yml/badge.svg)](https://github.com/thomaskhub/loglantern/actions/workflows/ci.yml)
 
 Small, self-hosted monitoring for a handful of servers. Fluent Bit on every host ships logs, metrics
 and check results to **one Go binary**, which:
@@ -33,7 +33,7 @@ long retention, use Prometheus/Loki/VictoriaMetrics.
 **Recommended: the install script** (Linux with systemd, amd64 or arm64):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/thomkin/loglantern/main/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/thomaskhub/loglantern/main/install.sh | sudo sh
 ```
 
 The script:
@@ -59,11 +59,11 @@ and restarts only if the check passes.
 Pass options with `| sudo sh -s -- --checks-only`. The script is also attached to every release.
 
 Other ways:
-- **Binary:** download from [Releases](https://github.com/thomkin/loglantern/releases), then use `examples/systemd/loglantern.service`.
-- **Container:** `ghcr.io/thomkin/loglantern:latest` (distroless, runs as non-root; mount the config at
+- **Binary:** download from [Releases](https://github.com/thomaskhub/loglantern/releases), then use `examples/systemd/loglantern.service`.
+- **Container:** `ghcr.io/thomaskhub/loglantern:latest` (distroless, runs as non-root; mount the config at
   `/etc/loglantern/config.yaml` and a writable volume at `/var/lib/loglantern`; listen on `0.0.0.0`).
   Docker adds a daemon, so on small VMs the binary is lighter.
-- **From source:** `go install github.com/thomkin/loglantern/cmd/loglantern@latest` (Go 1.26+), or `docker build .`.
+- **From source:** `go install github.com/thomaskhub/loglantern/cmd/loglantern@latest` (Go 1.26+), or `docker build .`.
 
 Commands: `loglantern [-config file] [-log-level info] run | check-config | version`.
 `systemctl reload loglantern` (SIGHUP) applies a changed config without dropping data; a broken config
@@ -73,7 +73,7 @@ is rejected and the running one stays. Changing `listen` or `storage.path` needs
 
 1. Install Fluent Bit and use [examples/fluent-bit/fluent-bit.conf](examples/fluent-bit/fluent-bit.conf).
    Set `LOGLANTERN_TOKEN`, `LOGLANTERN_HOST`, `HOST_ROLE` and `LOGLANTERN_ADDR` in its environment.
-2. Optional checks: `curl -fsSL https://raw.githubusercontent.com/thomkin/loglantern/main/install.sh | sudo sh -s -- --checks-only`
+2. Optional checks: `curl -fsSL https://raw.githubusercontent.com/thomaskhub/loglantern/main/install.sh | sudo sh -s -- --checks-only`
    installs [examples/checks](examples/checks) to `/usr/local/lib/loglantern-checks/` with a timer that runs them every 2 minutes. Included:
    - `system.sh`: `mem.used_pct`, `mem.swap_pct`, `disk.used_pct`, `disk.inodes_pct` (extra mounts as `disk_<mount>.*`), `load.per_cpu`, `systemd.failed`
    - `postgres.sh` (runs as the postgres user; does nothing on hosts without PostgreSQL): `postgres.up`, `postgres.primary`, `postgres.connections_pct`, `replication.lag_s`, `replication.streaming`, `backup.status`, `backup.age_h` (pgBackRest)

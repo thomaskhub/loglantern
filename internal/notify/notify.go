@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/config"
-	"github.com/thomkin/loglantern/internal/store"
+	"github.com/thomaskhub/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/store"
 )
 
 // Notifier sends one text to a target (e.g. a Telegram topic name).

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/notify"
-	"github.com/thomkin/loglantern/internal/store"
+	"github.com/thomaskhub/loglantern/internal/notify"
+	"github.com/thomaskhub/loglantern/internal/store"
 )
 
 const metaKey = "report.last"

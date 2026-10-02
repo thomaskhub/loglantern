@@ -13,7 +13,7 @@ import (
 
 	_ "modernc.org/sqlite" // database/sql driver "sqlite"
 
-	"github.com/thomkin/loglantern/internal/record"
+	"github.com/thomaskhub/loglantern/internal/record"
 )
 
 const schemaVersion = 1

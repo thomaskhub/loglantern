@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/config"
-	"github.com/thomkin/loglantern/internal/ingest"
-	"github.com/thomkin/loglantern/internal/record"
+	"github.com/thomaskhub/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/ingest"
+	"github.com/thomaskhub/loglantern/internal/record"
 )
 
 // A full queue answers busy so Fluent Bit keeps the data and retries.

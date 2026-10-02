@@ -3,7 +3,7 @@ package test
 import (
 	"testing"
 
-	"github.com/thomkin/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/config"
 )
 
 // The example config stays valid as the code changes.

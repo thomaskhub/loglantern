@@ -1,4 +1,4 @@
-module github.com/thomkin/loglantern
+module github.com/thomaskhub/loglantern
 
 go 1.26.0
 

@@ -1,8 +1,8 @@
 #!/bin/sh
 # Install, update or remove loglantern on a Linux host with systemd.
 #
-#   curl -fsSL https://raw.githubusercontent.com/thomkin/loglantern/main/install.sh | sudo sh
-#   curl -fsSL https://raw.githubusercontent.com/thomkin/loglantern/main/install.sh | sudo sh -s -- --checks-only
+#   curl -fsSL https://raw.githubusercontent.com/thomaskhub/loglantern/main/install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/thomaskhub/loglantern/main/install.sh | sudo sh -s -- --checks-only
 #
 # Options:
 #   --version vX.Y.Z   install this release (default: latest)
@@ -17,7 +17,7 @@
 # before it replaces the old one and restarts the service.
 set -eu
 
-REPO=thomkin/loglantern
+REPO=thomaskhub/loglantern
 BIN=/usr/local/bin/loglantern
 ETC=/etc/loglantern
 DATA=/var/lib/loglantern

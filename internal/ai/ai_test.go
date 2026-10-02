@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/config"
-	"github.com/thomkin/loglantern/internal/record"
-	"github.com/thomkin/loglantern/internal/store"
+	"github.com/thomaskhub/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/record"
+	"github.com/thomaskhub/loglantern/internal/store"
 )
 
 func TestAskBudgetMask(t *testing.T) {

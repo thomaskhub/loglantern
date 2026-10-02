@@ -1,7 +1,7 @@
 # Security
 
 Please report vulnerabilities privately through GitHub's
-[security advisories](https://github.com/thomkin/loglantern/security/advisories/new), not in public issues.
+[security advisories](https://github.com/thomaskhub/loglantern/security/advisories/new), not in public issues.
 You will get an answer within a week.
 
 Deployment notes:

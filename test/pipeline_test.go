@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thomkin/loglantern/internal/app"
-	"github.com/thomkin/loglantern/internal/config"
-	"github.com/thomkin/loglantern/internal/notify"
+	"github.com/thomaskhub/loglantern/internal/app"
+	"github.com/thomaskhub/loglantern/internal/config"
+	"github.com/thomaskhub/loglantern/internal/notify"
 )
 
 type fakeNotifier struct {
