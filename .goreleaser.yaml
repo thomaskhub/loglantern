@@ -1,0 +1,45 @@
+version: 2
+
+project_name: loglantern
+
+builds:
+  - main: ./cmd/loglantern
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Version }}"]
+
+archives:
+  - formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - examples/**/*
+
+checksum:
+  name_template: checksums.txt
+
+dockers:
+  - image_templates: ["ghcr.io/thomkin/loglantern:{{ .Version }}-amd64"]
+    dockerfile: Dockerfile.release
+    use: buildx
+    goarch: amd64
+    build_flag_templates: ["--platform=linux/amd64"]
+  - image_templates: ["ghcr.io/thomkin/loglantern:{{ .Version }}-arm64"]
+    dockerfile: Dockerfile.release
+    use: buildx
+    goarch: arm64
+    build_flag_templates: ["--platform=linux/arm64"]
+
+docker_manifests:
+  - name_template: ghcr.io/thomkin/loglantern:{{ .Version }}
+    image_templates: ["ghcr.io/thomkin/loglantern:{{ .Version }}-amd64", "ghcr.io/thomkin/loglantern:{{ .Version }}-arm64"]
+  - name_template: ghcr.io/thomkin/loglantern:latest
+    image_templates: ["ghcr.io/thomkin/loglantern:{{ .Version }}-amd64", "ghcr.io/thomkin/loglantern:{{ .Version }}-arm64"]
+
+changelog:
+  use: github
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]

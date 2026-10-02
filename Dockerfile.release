@@ -1,0 +1,7 @@
+# Image built by GoReleaser from the released binary.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY loglantern /loglantern
+VOLUME /var/lib/loglantern
+EXPOSE 8440 8441
+ENTRYPOINT ["/loglantern"]
+CMD ["-config", "/etc/loglantern/config.yaml"]
