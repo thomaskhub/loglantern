@@ -48,7 +48,7 @@ func setup(t *testing.T, enrich Enricher) (*Manager, *store.Store) {
 
 func due(t *testing.T, st *store.Store) []string {
 	t.Helper()
-	ms, err := st.Due(context.Background(), t0.Add(24*time.Hour), 100)
+	ms, err := st.Due(context.Background(), time.Now().Add(24*time.Hour), 100) // follow-ups are queued with the real clock
 	if err != nil {
 		t.Fatal(err)
 	}
