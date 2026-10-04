@@ -5,6 +5,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The status table shows CPU, memory and swap as average/peak over the status window instead of the last value.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added

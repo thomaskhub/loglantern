@@ -27,31 +27,91 @@ func slot(every time.Duration, now time.Time) string {
 	return strconv.FormatInt(now.Truncate(every).Unix(), 10)
 }
 
-// SendStatus queues the host table on route and remembers the slot.
+// Stat is the average and peak of a metric over the status window.
+type Stat struct {
+	Avg, Max float64
+	OK       bool
+}
+
+// Row is one table line: the host and its window statistics. Disk is the latest value.
+type Row struct {
+	Host           store.Host
+	CPU, Mem, Swap Stat
+}
+
+// SendStatus queues the host table on route and remembers the slot. CPU, memory and swap are
+// averaged over the last "every" minutes from the stored 1-minute values.
 func SendStatus(ctx context.Context, st *store.Store, out *notify.Outbox, hosts []store.Host, route string, every time.Duration, loc *time.Location, now time.Time) (string, error) {
 	open := map[string]int{}
+	rows := make([]Row, 0, len(hosts))
+	from := now.Add(-every)
 	for _, h := range hosts {
-		if _, done := open[h.Env]; done {
-			continue
+		if _, done := open[h.Env]; !done {
+			ins, err := st.Incidents(ctx, store.IncidentFilter{Envs: []string{h.Env}, Status: store.StatusOpen, Limit: 1000})
+			if err != nil {
+				return "", err
+			}
+			open[h.Env] = len(ins)
 		}
-		ins, err := st.Incidents(ctx, store.IncidentFilter{Envs: []string{h.Env}, Status: store.StatusOpen, Limit: 1000})
-		if err != nil {
+		r := Row{Host: h}
+		var err error
+		if r.CPU, err = window(ctx, st, h, from, now, "cpu.cpu_p"); err != nil {
 			return "", err
 		}
-		open[h.Env] = len(ins)
+		if r.Mem, err = windowPct(ctx, st, h, from, now, "mem.used_pct", "mem.Mem.used", "mem.Mem.total"); err != nil {
+			return "", err
+		}
+		if r.Swap, err = windowPct(ctx, st, h, from, now, "mem.swap_pct", "mem.Swap.used", "mem.Swap.total"); err != nil {
+			return "", err
+		}
+		rows = append(rows, r)
 	}
-	text := BuildStatus(hosts, open, now, loc)
+	text := BuildStatus(rows, open, every, now, loc)
 	if err := out.Put(ctx, route, text, 0, false, now); err != nil {
 		return "", err
 	}
 	return text, st.SetMeta(ctx, statusKey, slot(every, now))
 }
 
-// BuildStatus renders one monospace table per environment: state and the latest CPU, memory, swap and disk percentages.
-func BuildStatus(hosts []store.Host, open map[string]int, now time.Time, loc *time.Location) string {
-	byEnv := map[string][]store.Host{}
-	for _, h := range hosts {
-		byEnv[h.Env] = append(byEnv[h.Env], h)
+func window(ctx context.Context, st *store.Store, h store.Host, from, to time.Time, name string) (Stat, error) {
+	pts, err := st.Series(ctx, h.Env, h.Host, name, from, to)
+	if err != nil || len(pts) == 0 {
+		return Stat{}, err
+	}
+	s := Stat{OK: true, Max: pts[0].V}
+	var sum float64
+	for _, p := range pts {
+		sum += p.V
+		s.Max = max(s.Max, p.V)
+	}
+	s.Avg = sum / float64(len(pts))
+	return s, nil
+}
+
+// windowPct prefers a ready percentage series and falls back to used/total of the averaged
+// raw series (the peak is then not known and equals the average).
+func windowPct(ctx context.Context, st *store.Store, h store.Host, from, to time.Time, key, used, total string) (Stat, error) {
+	if s, err := window(ctx, st, h, from, to, key); err != nil || s.OK {
+		return s, err
+	}
+	u, err := window(ctx, st, h, from, to, used)
+	if err != nil || !u.OK {
+		return Stat{}, err
+	}
+	t, err := window(ctx, st, h, from, to, total)
+	if err != nil || !t.OK || t.Avg <= 0 {
+		return Stat{}, err
+	}
+	v := u.Avg / t.Avg * 100
+	return Stat{Avg: v, Max: u.Max / t.Avg * 100, OK: true}, nil
+}
+
+// BuildStatus renders one monospace table per environment: state, CPU, memory and swap as
+// average/peak over the window, and the latest disk percentage.
+func BuildStatus(rows []Row, open map[string]int, every time.Duration, now time.Time, loc *time.Location) string {
+	byEnv := map[string][]Row{}
+	for _, r := range rows {
+		byEnv[r.Host.Env] = append(byEnv[r.Host.Env], r)
 	}
 	envs := make([]string, 0, len(byEnv))
 	for e := range byEnv {
@@ -63,21 +123,22 @@ func BuildStatus(hosts []store.Host, open map[string]int, now time.Time, loc *ti
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		hs := byEnv[env]
-		sort.Slice(hs, func(i, j int) bool { return hs[i].Host < hs[j].Host })
-		names := make([]string, len(hs))
-		for i, h := range hs {
-			names[i] = h.Host
+		rs := byEnv[env]
+		sort.Slice(rs, func(i, j int) bool { return rs[i].Host.Host < rs[j].Host.Host })
+		names := make([]string, len(rs))
+		for i, r := range rs {
+			names[i] = r.Host.Host
 		}
 		short := shortNames(env, names)
 		width := len("host")
 		for _, n := range short {
 			width = max(width, len(n))
 		}
-		fmt.Fprintf(&b, "Status %s %s\n```\n", strings.ToUpper(env), now.In(loc).Format("2006-01-02 15:04 MST"))
-		fmt.Fprintf(&b, "%-*s  %-4s %3s %3s %3s %3s\n", width, "host", "st", "cpu", "mem", "swp", "dsk")
+		fmt.Fprintf(&b, "Status %s %s, avg/peak of the last %s\n```\n", strings.ToUpper(env), now.In(loc).Format("2006-01-02 15:04 MST"), every.Round(time.Minute))
+		fmt.Fprintf(&b, "%-*s  %-4s %-7s %-7s %-5s %3s\n", width, "host", "st", "cpu", "mem", "swp", "dsk")
 		var missing []string
-		for i, h := range hs {
+		for i, r := range rs {
+			h := r.Host
 			state := "up"
 			switch h.Status {
 			case "missing":
@@ -91,11 +152,7 @@ func BuildStatus(hosts []store.Host, open map[string]int, now time.Time, loc *ti
 			default:
 				state = "?"
 			}
-			fmt.Fprintf(&b, "%-*s  %-4s %3s %3s %3s %3s\n", width, short[i], state,
-				val(h.Last, "cpu.cpu_p"),
-				pct(h.Last, "mem.used_pct", "mem.Mem.used", "mem.Mem.total"),
-				pct(h.Last, "mem.swap_pct", "mem.Swap.used", "mem.Swap.total"),
-				val(h.Last, "disk.used_pct"))
+			fmt.Fprintf(&b, "%-*s  %-4s %-7s %-7s %-5s %3s\n", width, short[i], state, r.CPU.cell(), r.Mem.cell(), r.Swap.cell(), val(h.Last, "disk.used_pct"))
 		}
 		b.WriteString("```\n")
 		fmt.Fprintf(&b, "Open incidents: %d\n", open[env])
@@ -106,22 +163,17 @@ func BuildStatus(hosts []store.Host, open map[string]int, now time.Time, loc *ti
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// cell is "avg/peak" in whole percent, "-" without data.
+func (s Stat) cell() string {
+	if !s.OK {
+		return "-"
+	}
+	return fmt.Sprintf("%d/%d", int(s.Avg+0.5), int(s.Max+0.5))
+}
+
 func val(m map[string]float64, key string) string {
 	if v, ok := m[key]; ok {
 		return strconv.Itoa(int(v + 0.5))
-	}
-	return "-"
-}
-
-// pct prefers a ready percentage (the host checks) and falls back to used/total of Fluent Bit's mem input.
-func pct(m map[string]float64, key, used, total string) string {
-	if v, ok := m[key]; ok {
-		return strconv.Itoa(int(v + 0.5))
-	}
-	u, ok1 := m[used]
-	t, ok2 := m[total]
-	if ok1 && ok2 && t > 0 {
-		return strconv.Itoa(int(u/t*100 + 0.5))
 	}
 	return "-"
 }

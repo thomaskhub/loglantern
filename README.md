@@ -186,7 +186,7 @@ How agents behave:
     `lightsail.burst_pct` and `lightsail.burst_minutes`.
   - The IAM user needs `lightsail:GetInstances` and `lightsail:GetInstanceMetricData`.
 - **Daily report** (`report: {at, tz, route}`): hosts, incidents, error lines compared with the day before, and low burst capacity.
-- **Status table** (`status: {every, route, tz}`): every `every` (10 m to 7 d; slots are multiples of it counted in UTC, e.g. `2h` = 00:00, 02:00 …) one monospace table per environment with the state and the latest CPU, memory, swap and disk percentage of every host, the number of open incidents and the hosts that are not reporting. It reads the heartbeat registry, so it needs no extra storage; a restart does not send a slot twice. CPU comes from Fluent Bit's `cpu` input; memory, swap and disk prefer the `mem.used_pct`, `mem.swap_pct` and `disk.used_pct` values of the host checks (Fluent Bit's own `mem` input counts the page cache as used). On Telegram the table is sent as a code block; Slack renders it natively.
+- **Status table** (`status: {every, route, tz}`): every `every` (10 m to 7 d; slots are multiples of it counted in UTC, e.g. `2h` = 00:00, 02:00 …) one monospace table per environment: the state of every host, CPU, memory and swap as `average/peak` in percent over the last `every` (from the stored 1-minute values), the latest disk percentage, the number of open incidents and the hosts that are not reporting. It needs no extra storage; a restart does not send a slot twice. CPU comes from Fluent Bit's `cpu` input; memory and swap prefer the `mem.used_pct` and `mem.swap_pct` values of the host checks (Fluent Bit's own `mem` input counts the page cache as used). On Telegram the table is sent as a code block; Slack renders it natively.
 
 ## API
 
