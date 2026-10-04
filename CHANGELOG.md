@@ -5,6 +5,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-04
+
 ### Changed
 
 - The status table shows CPU, memory and swap as average/peak over the status window instead of the last value.
@@ -47,6 +49,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - `install.sh`: install, update (config checked first), checks-only, uninstall/purge; verifies release checksums.
 - Example checks (system, PostgreSQL), Fluent Bit config, systemd units; container image and release binaries.
 
+[0.2.1]: https://github.com/thomaskhub/loglantern/releases/tag/v0.2.1
 [0.2.0]: https://github.com/thomaskhub/loglantern/releases/tag/v0.2.0
 [0.1.1]: https://github.com/thomaskhub/loglantern/releases/tag/v0.1.1
 [0.1.0]: https://github.com/thomaskhub/loglantern/releases/tag/v0.1.0
