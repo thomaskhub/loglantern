@@ -5,6 +5,15 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `status: {every, route, tz}`: a periodic table of all hosts (state, CPU, memory, swap, disk, open incidents, hosts not reporting) per environment.
+- Telegram messages are sent as HTML; text between ``` lines is shown as a monospace block.
+
+### Fixed
+
+- The incident enrichment test no longer depends on the current date.
+
 ### Changed
 
 - Release builds are Linux only (amd64, arm64).

@@ -366,6 +366,16 @@ func (a *App) Tick(ctx context.Context) {
 	if err := a.st.SaveHosts(ctx, a.reg.Snapshot()); err != nil {
 		a.log.Error("save hosts", "err", err)
 	}
+	if st := a.cfg.Status; st != nil {
+		every := time.Duration(st.Every)
+		if due, err := report.StatusDue(ctx, a.st, every, now); err != nil {
+			a.log.Error("status", "err", err)
+		} else if due {
+			if _, err := report.SendStatus(ctx, a.st, a.out, a.reg.Snapshot(), st.Route, every, st.Location(), now); err != nil {
+				a.log.Error("status", "err", err)
+			}
+		}
+	}
 	if r := a.cfg.Report; r != nil {
 		if due, err := report.Due(ctx, a.st, r.At, r.Location(), now); err != nil {
 			a.log.Error("report", "err", err)

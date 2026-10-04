@@ -125,6 +125,9 @@ lightsail:
 
 report: {at: "07:00", tz: Europe/Berlin, route: daily}
 
+# host table (state, CPU, memory, swap, disk) every 2 hours, on even UTC hours
+status: {every: 2h, tz: Europe/Berlin, route: daily}
+
 # maintenance windows mute notifications (incidents are still recorded and announced afterwards if
 # still open); ad-hoc silences are created with POST /api/v1/silences (role admin)
 maintenance:

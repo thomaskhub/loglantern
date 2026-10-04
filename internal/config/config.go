@@ -91,6 +91,7 @@ type Config struct {
 	Probes       []Probe             `yaml:"probes"`
 	Lightsail    *Lightsail          `yaml:"lightsail"`
 	Report       *Report             `yaml:"report"`
+	Status       *Status             `yaml:"status"`
 	Maintenance  []Maintenance       `yaml:"maintenance"`
 	Auth         Auth                `yaml:"auth"`
 	CORS         []string            `yaml:"cors"`
@@ -412,6 +413,22 @@ type Report struct {
 	TZ    string `yaml:"tz"`    // IANA zone of at (default UTC)
 	Route string `yaml:"route"` // route name
 	loc   *time.Location
+}
+
+// Status is the periodic host table: state and latest CPU, memory, swap and disk values.
+type Status struct {
+	Every Duration `yaml:"every"` // 10m to 7d; slots are multiples of it, counted in UTC
+	Route string   `yaml:"route"` // route name
+	TZ    string   `yaml:"tz"`    // IANA zone of the time in the header (default UTC)
+	loc   *time.Location
+}
+
+// Location is the time zone of the status header.
+func (s Status) Location() *time.Location {
+	if s.loc == nil {
+		return time.UTC
+	}
+	return s.loc
 }
 
 // Location is the time zone of the report.
@@ -829,6 +846,21 @@ func (c *Config) validate() error {
 		}
 		if _, err := time.Parse("15:04", c.Report.At); err != nil {
 			bad("report.at: want HH:MM (UTC)")
+		}
+	}
+	if c.Status != nil {
+		if !routes[c.Status.Route] {
+			bad("status: route %q is not configured", c.Status.Route)
+		}
+		if d := time.Duration(c.Status.Every); d < 10*time.Minute || d > 7*24*time.Hour {
+			bad("status.every: want between 10m and 7d")
+		}
+		if c.Status.TZ != "" {
+			loc, err := time.LoadLocation(c.Status.TZ)
+			if err != nil {
+				bad("status.tz: %v", err)
+			}
+			c.Status.loc = loc
 		}
 	}
 	for i := range c.Maintenance {

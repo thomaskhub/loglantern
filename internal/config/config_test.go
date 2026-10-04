@@ -66,6 +66,12 @@ lightsail: {regions: [eu-central-1], access_key_env: LL_AK2, secret_key_env: LL_
 			}
 		}},
 		{name: "C8_report_route_and_time", yaml: minimal + "report: {at: '6am', route: nope}\n", wantErr: "report"},
+		{name: "C8b_status_route_and_every", yaml: minimal + "status: {every: 1m, route: nope}\n", wantErr: "status"},
+		{name: "C8c_status_ok", yaml: minimal + "status: {every: 2h, tz: Asia/Kolkata, route: r}\nroutes: [{name: r, send: [w]}]\nnotifiers: {w: {webhook: {url_env: LL_FT}}}\n", check: func(t *testing.T, c *Config) {
+			if c.Status == nil || time.Duration(c.Status.Every) != 2*time.Hour || c.Status.Location().String() != "Asia/Kolkata" {
+				t.Errorf("status not parsed: %+v", c.Status)
+			}
+		}},
 		{name: "C9_auth_roles", yaml: minimal + `
 auth:
   api_keys: [{name: d, key_env: LL_KEY, role: admin}]
