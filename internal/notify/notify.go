@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -55,9 +56,38 @@ type Telegram struct {
 	Client *http.Client
 }
 
-// Send posts a plain text message.
+// telegramHTML escapes text for parse_mode HTML and turns ``` fenced blocks into <pre> (monospace tables).
+func telegramHTML(s string) string {
+	var out strings.Builder
+	var buf []string
+	inPre := false
+	flush := func() {
+		if len(buf) == 0 {
+			return
+		}
+		t := html.EscapeString(strings.Join(buf, "\n"))
+		if inPre {
+			out.WriteString("<pre>" + t + "</pre>\n")
+		} else {
+			out.WriteString(t + "\n")
+		}
+		buf = nil
+	}
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) == "```" {
+			flush()
+			inPre = !inPre
+			continue
+		}
+		buf = append(buf, line)
+	}
+	flush()
+	return strings.TrimRight(out.String(), "\n")
+}
+
+// Send posts a message; ``` fenced blocks are sent as monospace.
 func (t *Telegram) Send(ctx context.Context, target, text string) error {
-	body := map[string]any{"chat_id": t.ChatID, "text": cut(text), "disable_web_page_preview": true}
+	body := map[string]any{"chat_id": t.ChatID, "text": telegramHTML(cut(text)), "parse_mode": "HTML", "disable_web_page_preview": true}
 	if target != "" {
 		id, ok := t.Topics[target]
 		if !ok {

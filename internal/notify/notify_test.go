@@ -228,3 +228,17 @@ func TestBackoff(t *testing.T) {
 		}
 	}
 }
+
+func TestTelegramHTML(t *testing.T) {
+	got := telegramHTML("Status <UAT> & co\n```\nhost  cpu\napi    12\n```\nOpen incidents: 0")
+	want := "Status &lt;UAT&gt; &amp; co\n<pre>host  cpu\napi    12</pre>\nOpen incidents: 0"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+	if got := telegramHTML("plain\ntext"); got != "plain\ntext" {
+		t.Errorf("plain text changed: %q", got)
+	}
+	if got := telegramHTML("a\n```\nb"); got != "a\n<pre>b</pre>" {
+		t.Errorf("unclosed fence: %q", got)
+	}
+}
