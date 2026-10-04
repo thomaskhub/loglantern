@@ -5,6 +5,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-04
+
 ### Added
 
 - `status: {every, route, tz}`: a periodic table of all hosts (state, CPU, memory, swap, disk, open incidents, hosts not reporting) per environment.
@@ -41,6 +43,6 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - `install.sh`: install, update (config checked first), checks-only, uninstall/purge; verifies release checksums.
 - Example checks (system, PostgreSQL), Fluent Bit config, systemd units; container image and release binaries.
 
-[0.1.1]: https://github.com/thomaskhub/loglantern/releases/tag/v0.1.1
+[0.2.0]: https://github.com/thomaskhub/loglantern/releases/tag/v0.2.0
 [0.1.1]: https://github.com/thomaskhub/loglantern/releases/tag/v0.1.1
 [0.1.0]: https://github.com/thomaskhub/loglantern/releases/tag/v0.1.0
