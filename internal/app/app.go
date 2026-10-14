@@ -410,12 +410,65 @@ func (a *App) Tick(ctx context.Context) {
 			}
 			if err != nil {
 				a.log.Error("report", "err", err)
-			} else if a.agents != nil && a.agents.Has(config.OnDailyReport) {
-				for route, text := range texts {
-					a.reviewReport(text, route)
+			} else {
+				if !r.NoGraph {
+					pairs := map[string]string{} // env -> route
+					if len(r.Routes) > 0 {
+						pairs = r.Routes
+					} else {
+						for _, env := range a.envs {
+							pairs[env] = r.Route
+						}
+					}
+					a.sendGraphs(pairs, r.Location(), now)
+				}
+				if a.agents != nil && a.agents.Has(config.OnDailyReport) {
+					for route, text := range texts {
+						a.reviewReport(text, route)
+					}
 				}
 			}
 		}
+	}
+}
+
+// sendGraphs draws the 24 h chart of each environment and sends it to its route in the background, up to three
+// tries (30 s, 2 min apart). The picture is a bonus: a failure is logged and the text report is already queued.
+func (a *App) sendGraphs(pairs map[string]string, loc *time.Location, now time.Time) {
+	hosts := a.reg.Snapshot()
+	for env, route := range pairs {
+		var sub []store.Host
+		for _, h := range hosts {
+			if h.Env == env {
+				sub = append(sub, h)
+			}
+		}
+		if len(sub) == 0 {
+			continue
+		}
+		a.bgWork.Add(1)
+		go func() {
+			defer a.bgWork.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			png, err := report.Chart(ctx, a.st, env, sub, loc, now)
+			if err != nil {
+				a.log.Warn("report chart", "env", env, "err", err)
+				return
+			}
+			caption := "CPU, memory, swap and disk of " + strings.ToUpper(env) + ", last 24 h"
+			for try, wait := 0, 30*time.Second; try < 3; try, wait = try+1, wait*4 {
+				if err = a.sender.SendImage(ctx, route, caption, png); err == nil {
+					return
+				}
+				a.log.Warn("report chart send", "env", env, "try", try+1, "err", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+			}
+		}()
 	}
 }
 

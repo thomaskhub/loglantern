@@ -414,7 +414,10 @@ type Report struct {
 	Route string `yaml:"route"` // route name
 	// Routes sends one report per environment to its own route (env -> route name) instead of one for all on Route.
 	Routes map[string]string `yaml:"routes"`
-	loc    *time.Location
+	// NoGraph turns off the 24 h chart (a PNG with CPU, memory, swap and disk of every host) that is sent after the
+	// report to the destinations that can show a picture (Telegram).
+	NoGraph bool `yaml:"no_graph"`
+	loc     *time.Location
 }
 
 // Status is the periodic host table: state and latest CPU, memory, swap and disk values.

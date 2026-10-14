@@ -261,3 +261,32 @@ func TestTelegramLayout(t *testing.T) {
 		t.Errorf("long text not wrapped: %q", got)
 	}
 }
+
+func TestTelegramSendImage(t *testing.T) {
+	var got struct {
+		path, chat, thread, caption string
+		size                        int
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Error(err)
+		}
+		got.path, got.chat, got.thread, got.caption = r.URL.Path, r.FormValue("chat_id"), r.FormValue("message_thread_id"), r.FormValue("caption")
+		if f, _, err := r.FormFile("photo"); err == nil {
+			b, _ := io.ReadAll(f)
+			got.size = len(b)
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	tg := &Telegram{Base: srv.URL, Token: "T", ChatID: "-100", Topics: map[string]int{"daily": 22}, Client: srv.Client()}
+	if err := tg.SendImage(context.Background(), "daily", "cap", []byte("pngdata")); err != nil {
+		t.Fatal(err)
+	}
+	if got.path != "/botT/sendPhoto" || got.chat != "-100" || got.thread != "22" || got.caption != "cap" || got.size != 7 {
+		t.Errorf("request: %+v", got)
+	}
+	if err := tg.SendImage(context.Background(), "nope", "c", nil); err == nil {
+		t.Error("unknown topic must fail")
+	}
+}

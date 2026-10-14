@@ -11,6 +11,7 @@ import (
 	"html"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -24,6 +25,11 @@ import (
 // Notifier sends one text to a target (e.g. a Telegram topic name).
 type Notifier interface {
 	Send(ctx context.Context, target, text string) error
+}
+
+// ImageNotifier is a Notifier that can also send a picture (PNG) with a caption.
+type ImageNotifier interface {
+	SendImage(ctx context.Context, target, caption string, png []byte) error
 }
 
 // RetryAfter is returned when the receiver asks to wait.
@@ -155,6 +161,60 @@ func (t *Telegram) Send(ctx context.Context, target, text string) error {
 		body["message_thread_id"] = id
 	}
 	resp, err := post(ctx, t.Client, strings.TrimRight(t.Base, "/")+"/bot"+t.Token+"/sendMessage", body)
+	if err != nil {
+		return errors.New("telegram: request failed") // the URL holds the token: never log it
+	}
+	defer resp.Body.Close()
+	var r struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Parameters  struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
+	}
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&r)
+	if resp.StatusCode == http.StatusTooManyRequests && r.Parameters.RetryAfter > 0 {
+		return &RetryAfter{Wait: time.Duration(r.Parameters.RetryAfter) * time.Second, Err: errors.New("telegram: rate limited")}
+	}
+	if resp.StatusCode != http.StatusOK || !r.OK {
+		return fmt.Errorf("telegram: %d %s", resp.StatusCode, r.Description)
+	}
+	return nil
+}
+
+// SendImage sends a PNG with a caption to a topic (sendPhoto).
+func (t *Telegram) SendImage(ctx context.Context, target, caption string, png []byte) error {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("chat_id", t.ChatID)
+	if target != "" {
+		id, ok := t.Topics[target]
+		if !ok {
+			return fmt.Errorf("telegram: unknown topic %q", target)
+		}
+		_ = mw.WriteField("message_thread_id", strconv.Itoa(id))
+	}
+	_ = mw.WriteField("caption", cut(caption))
+	fw, err := mw.CreateFormFile("photo", "chart.png")
+	if err != nil {
+		return err
+	}
+	if _, err := fw.Write(png); err != nil {
+		return err
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(t.Base, "/")+"/bot"+t.Token+"/sendPhoto", &buf)
+	if err != nil {
+		return errors.New("telegram: request failed")
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	c := t.Client
+	if c == nil {
+		c = http.DefaultClient
+	}
+	resp, err := c.Do(req)
 	if err != nil {
 		return errors.New("telegram: request failed") // the URL holds the token: never log it
 	}
@@ -425,6 +485,30 @@ func (s *Sender) send(ctx context.Context, dest, text string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	return n.Send(ctx, target, text)
+}
+
+// SendImage sends a picture to every destination of route whose notifier can show one (Telegram); the others
+// are skipped. It is best effort and not queued: the text of a report is the reliable part.
+func (s *Sender) SendImage(ctx context.Context, route, caption string, png []byte) error {
+	r, ok := s.Routes[route]
+	if !ok {
+		return fmt.Errorf("route %q not configured", route)
+	}
+	var errs []error
+	for _, d := range r.Send {
+		name, target := config.SplitDest(d)
+		in, ok := s.Notifiers[name].(ImageNotifier)
+		if !ok {
+			continue
+		}
+		cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		err := in.SendImage(cctx, target, caption, png)
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", d, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Sender) now() time.Time {
