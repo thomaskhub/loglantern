@@ -5,6 +5,12 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-14
+
+### Changed
+
+- Telegram: incident messages (alert, still open, resolved, AI) get a bold header line with severity, env/host and id, and long rule text is broken at `; `. The stored text and the other notifiers are unchanged.
+
 ## [0.2.1] - 2026-10-04
 
 ### Changed
