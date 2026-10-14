@@ -242,3 +242,22 @@ func TestTelegramHTML(t *testing.T) {
 		t.Errorf("unclosed fence: %q", got)
 	}
 }
+
+func TestTelegramLayout(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"[CRIT] prod/api-in #12: disk 91% on /", "<b>\U0001F534 CRIT \u00b7 prod/api-in \u00b7 #12</b>\ndisk 91% on /"},
+		{"[WARN] uat/h1 #3: cpu high (open since 1h01m)", "<b>\U0001F7E0 WARN \u00b7 uat/h1 \u00b7 #3 \u00b7 open since 1h01m</b>\ncpu high"},
+		{"[RESOLVED] uat/h1 #1 after 12m: cpu high", "<b>\u2705 resolved after 12m \u00b7 uat/h1 \u00b7 #1</b>\ncpu high"},
+		{"[STILL OPEN 5h02m] uat/h1 #1: cpu high", "<b>\u23f0 still open 5h02m \u00b7 uat/h1 \u00b7 #1</b>\ncpu high"},
+		{"[AI explain] uat/h1 #1: a <b> & c", "<b>\U0001F916 explain \u00b7 uat/h1 \u00b7 #1</b>\na &lt;b&gt; &amp; c"},
+		{"Daily report\nall fine", "Daily report\nall fine"},
+	} {
+		if got := telegramText(c.in); got != c.want {
+			t.Errorf("telegramText(%q)\n got %q\nwant %q", c.in, got, c.want)
+		}
+	}
+	long := "a very long first part of the rule text that goes on; second part of the rule text goes on and on; third"
+	if got := telegramText("[CRIT] p/h #1: " + long); strings.Count(got, "\n") != 3 {
+		t.Errorf("long text not wrapped: %q", got)
+	}
+}

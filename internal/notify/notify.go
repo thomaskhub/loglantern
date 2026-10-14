@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -85,9 +86,67 @@ func telegramHTML(s string) string {
 	return strings.TrimRight(out.String(), "\n")
 }
 
+var (
+	reAlert    = regexp.MustCompile(`(?s)^\[([A-Za-z]+)\] (\S+/\S+) #(\d+): (.*)$`)
+	reResolved = regexp.MustCompile(`(?s)^\[RESOLVED\] (\S+/\S+) #(\d+) after (\S+): (.*)$`)
+	reStill    = regexp.MustCompile(`(?s)^\[STILL OPEN (\S+)\] (\S+/\S+) #(\d+): (.*)$`)
+	reAI       = regexp.MustCompile(`(?s)^\[AI ([^\]]+)\] (\S+/\S+) #(\d+): (.*)$`)
+	reSince    = regexp.MustCompile(`^(.*) \(open since (\S+)\)$`)
+)
+
+// telegramLayout turns the one-line incident messages ("[CRIT] env/host #7: text") into a bold header line and a body that
+// breaks at "; ", so long rule text stays readable. Other messages (status, daily, free text) come back unchanged.
+// Only the Telegram notifier uses it: the stored text, webhooks, Slack and e-mail keep the one-line form.
+func telegramLayout(s string) (header, body string) {
+	sep := " \u00b7 "
+	if m := reResolved.FindStringSubmatch(s); m != nil {
+		return "\u2705 resolved after " + m[3] + sep + m[1] + sep + "#" + m[2], wrapText(m[4])
+	}
+	if m := reStill.FindStringSubmatch(s); m != nil {
+		return "\u23f0 still open " + m[1] + sep + m[2] + sep + "#" + m[3], wrapText(m[4])
+	}
+	if m := reAI.FindStringSubmatch(s); m != nil {
+		return "\U0001F916 " + m[1] + sep + m[2] + sep + "#" + m[3], m[4]
+	}
+	if m := reAlert.FindStringSubmatch(s); m != nil {
+		icon := "\u26aa"
+		switch strings.ToUpper(m[1]) {
+		case "CRIT", "CRITICAL":
+			icon = "\U0001F534"
+		case "WARN", "WARNING":
+			icon = "\U0001F7E0"
+		case "INFO":
+			icon = "\U0001F535"
+		}
+		head, text := icon+" "+strings.ToUpper(m[1])+sep+m[2]+sep+"#"+m[3], m[4]
+		if sm := reSince.FindStringSubmatch(text); sm != nil {
+			head, text = head+sep+"open since "+sm[2], sm[1]
+		}
+		return head, wrapText(text)
+	}
+	return "", s
+}
+
+// wrapText puts each "; " part of a long one-line text on its own line.
+func wrapText(s string) string {
+	if len(s) <= 80 || strings.Contains(s, "\n") {
+		return s
+	}
+	return strings.ReplaceAll(s, "; ", "\n")
+}
+
+// telegramText is the HTML text of one message: bold header (incident messages) and the escaped body.
+func telegramText(s string) string {
+	head, body := telegramLayout(s)
+	if head == "" {
+		return telegramHTML(s)
+	}
+	return "<b>" + html.EscapeString(head) + "</b>\n" + telegramHTML(body)
+}
+
 // Send posts a message; ``` fenced blocks are sent as monospace.
 func (t *Telegram) Send(ctx context.Context, target, text string) error {
-	body := map[string]any{"chat_id": t.ChatID, "text": telegramHTML(cut(text)), "parse_mode": "HTML", "disable_web_page_preview": true}
+	body := map[string]any{"chat_id": t.ChatID, "text": telegramText(cut(text)), "parse_mode": "HTML", "disable_web_page_preview": true}
 	if target != "" {
 		id, ok := t.Topics[target]
 		if !ok {

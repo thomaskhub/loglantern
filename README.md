@@ -173,6 +173,7 @@ Any OpenAI-compatible API works, e.g. OpenRouter or a local Ollama. Each entry i
 How agents behave:
 - An agent makes one call and has no tools.
 - Its answer is sent as a follow-up (`[AI <name>] …`) and stored on the incident.
+- On Telegram, incident messages (alert, still open, resolved, AI) get a bold header line (`🔴 CRIT · env/host · #id`) and long rule text is broken at `; `. The stored text and the other notifiers keep the one-line form.
 - E-mails, tokens and passwords are masked before anything is sent.
 - All agents share a daily call budget, and alarms never depend on them.
 - Without `agents`, a built-in `explain` agent runs on every new incident.
