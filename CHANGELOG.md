@@ -5,6 +5,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-14
+
 ### Added
 
 - `report.routes` and `status.routes` (env -> route): one report and one status table per environment on its own route, so one environment's group never shows another's hosts.
