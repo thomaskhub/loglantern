@@ -5,6 +5,13 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-14
+
+### Added
+
+- Daily report chart: after the report, one PNG per environment with CPU, memory, swap and disk of every host over the last 24 hours (one line per host, four panels) is sent to the report route's Telegram topic (`sendPhoto`). Best effort, three tries; the text report is unchanged. Turn off with `report: {no_graph: true}`.
+- `notify.ImageNotifier`: notifiers that can show a picture; only Telegram does, other destinations are skipped.
+
 ## [0.3.0] - 2026-10-14
 
 ### Added
