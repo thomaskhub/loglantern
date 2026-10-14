@@ -412,15 +412,19 @@ type Report struct {
 	At    string `yaml:"at"`    // "HH:MM"
 	TZ    string `yaml:"tz"`    // IANA zone of at (default UTC)
 	Route string `yaml:"route"` // route name
-	loc   *time.Location
+	// Routes sends one report per environment to its own route (env -> route name) instead of one for all on Route.
+	Routes map[string]string `yaml:"routes"`
+	loc    *time.Location
 }
 
 // Status is the periodic host table: state and latest CPU, memory, swap and disk values.
 type Status struct {
 	Every Duration `yaml:"every"` // 10m to 7d; slots are multiples of it, counted in UTC
 	Route string   `yaml:"route"` // route name
-	TZ    string   `yaml:"tz"`    // IANA zone of the time in the header (default UTC)
-	loc   *time.Location
+	// Routes sends one table per environment to its own route (env -> route name) instead of all on Route.
+	Routes map[string]string `yaml:"routes"`
+	TZ     string            `yaml:"tz"` // IANA zone of the time in the header (default UTC)
+	loc    *time.Location
 }
 
 // Location is the time zone of the status header.
@@ -833,8 +837,15 @@ func (c *Config) validate() error {
 			}
 		}
 	}
-	if c.Report != nil && !routes[c.Report.Route] {
-		bad("report: route %q is not configured", c.Report.Route)
+	if c.Report != nil {
+		if len(c.Report.Routes) == 0 && !routes[c.Report.Route] {
+			bad("report: route %q is not configured", c.Report.Route)
+		}
+		for env, r := range c.Report.Routes {
+			if !routes[r] {
+				bad("report.routes.%s: route %q is not configured", env, r)
+			}
+		}
 	}
 	if c.Report != nil {
 		if c.Report.TZ != "" {
@@ -849,8 +860,13 @@ func (c *Config) validate() error {
 		}
 	}
 	if c.Status != nil {
-		if !routes[c.Status.Route] {
+		if len(c.Status.Routes) == 0 && !routes[c.Status.Route] {
 			bad("status: route %q is not configured", c.Status.Route)
+		}
+		for env, r := range c.Status.Routes {
+			if !routes[r] {
+				bad("status.routes.%s: route %q is not configured", env, r)
+			}
 		}
 		if d := time.Duration(c.Status.Every); d < 10*time.Minute || d > 7*24*time.Hour {
 			bad("status.every: want between 10m and 7d")

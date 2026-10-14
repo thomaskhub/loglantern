@@ -153,3 +153,19 @@ func Send(ctx context.Context, st *store.Store, out *notify.Outbox, envs []strin
 	}
 	return text, st.SetMeta(ctx, metaKey, now.In(loc).Format("2006-01-02"))
 }
+
+// SendEach builds one report per environment and queues each on its own route (once per day). It returns the text by route.
+func SendEach(ctx context.Context, st *store.Store, out *notify.Outbox, routes map[string]string, loc *time.Location, now time.Time) (map[string]string, error) {
+	texts := map[string]string{}
+	for _, env := range slices.Sorted(maps.Keys(routes)) {
+		text, err := Build(ctx, st, []string{env}, now)
+		if err != nil {
+			return nil, err
+		}
+		if err := out.Put(ctx, routes[env], text, 0, false, now); err != nil {
+			return nil, err
+		}
+		texts[routes[env]] = text
+	}
+	return texts, st.SetMeta(ctx, metaKey, now.In(loc).Format("2006-01-02"))
+}

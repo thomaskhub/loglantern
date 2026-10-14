@@ -119,3 +119,29 @@ func TestDueLocalDate(t *testing.T) {
 		t.Fatal("Y6 due twice on the same local day")
 	}
 }
+
+func TestSendEachSplitsByEnvironment(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ll.db"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 6, 0, 0, 0, time.UTC)
+	seen := now.Add(-time.Minute)
+	_ = st.SaveHosts(ctx, []store.Host{
+		{Env: "uat", Host: "api1", Status: "up", LastSeen: &seen},
+		{Env: "prod", Host: "p1", Status: "up", LastSeen: &seen},
+	})
+	out := notify.NewOutbox(st, &config.Config{Routes: []config.Route{{Name: "u", Send: []string{"w/x"}}, {Name: "p", Send: []string{"w/y"}}}})
+	texts, err := SendEach(ctx, st, out, map[string]string{"uat": "u", "prod": "p"}, time.UTC, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(texts["u"], "PROD") || !strings.Contains(texts["u"], "UAT: 1 hosts") {
+		t.Errorf("uat report: %q", texts["u"])
+	}
+	if strings.Contains(texts["p"], "UAT") || !strings.Contains(texts["p"], "PROD: 1 hosts") {
+		t.Errorf("prod report: %q", texts["p"])
+	}
+}

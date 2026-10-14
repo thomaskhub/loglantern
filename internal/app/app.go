@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"slices"
@@ -371,8 +372,25 @@ func (a *App) Tick(ctx context.Context) {
 		if due, err := report.StatusDue(ctx, a.st, every, now); err != nil {
 			a.log.Error("status", "err", err)
 		} else if due {
-			if _, err := report.SendStatus(ctx, a.st, a.out, a.reg.Snapshot(), st.Route, every, st.Location(), now); err != nil {
-				a.log.Error("status", "err", err)
+			hosts := a.reg.Snapshot()
+			if len(st.Routes) == 0 {
+				if _, err := report.SendStatus(ctx, a.st, a.out, hosts, st.Route, every, st.Location(), now); err != nil {
+					a.log.Error("status", "err", err)
+				}
+			}
+			for _, env := range slices.Sorted(maps.Keys(st.Routes)) {
+				var sub []store.Host
+				for _, h := range hosts {
+					if h.Env == env {
+						sub = append(sub, h)
+					}
+				}
+				if len(sub) == 0 {
+					continue
+				}
+				if _, err := report.SendStatus(ctx, a.st, a.out, sub, st.Routes[env], every, st.Location(), now); err != nil {
+					a.log.Error("status", "err", err, "env", env)
+				}
 			}
 		}
 	}
@@ -380,11 +398,22 @@ func (a *App) Tick(ctx context.Context) {
 		if due, err := report.Due(ctx, a.st, r.At, r.Location(), now); err != nil {
 			a.log.Error("report", "err", err)
 		} else if due {
-			text, err := report.Send(ctx, a.st, a.out, a.envs, r.Route, r.Location(), now)
+			texts := map[string]string{}
+			var err error
+			if len(r.Routes) > 0 {
+				texts, err = report.SendEach(ctx, a.st, a.out, r.Routes, r.Location(), now)
+			} else {
+				var text string
+				if text, err = report.Send(ctx, a.st, a.out, a.envs, r.Route, r.Location(), now); err == nil {
+					texts[r.Route] = text
+				}
+			}
 			if err != nil {
 				a.log.Error("report", "err", err)
 			} else if a.agents != nil && a.agents.Has(config.OnDailyReport) {
-				a.reviewReport(text, r.Route)
+				for route, text := range texts {
+					a.reviewReport(text, route)
+				}
 			}
 		}
 	}
